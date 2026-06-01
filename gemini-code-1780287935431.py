@@ -34,6 +34,7 @@ if "app_data" not in st.session_state:
             "subject": "",
             "start_date": datetime.today().date(),
             "end_date": datetime.today().date() + timedelta(days=7),
+            # 하루 여러 일정 지원을 위해 구조 변경: "날짜": [{"id": 0, "content": "발표", "worker": "카이", "status": "⏳"}]
             "calendar_events": {}, 
             "notices": [],
             "chats": [],
@@ -360,7 +361,6 @@ else:
         else:
             st.markdown("### 🚨 실시간 조원별 거래 현황 및 변동 지표")
             
-            # [버그 방지]: 조원 수가 1명 이상일 때만 동적 컬럼 생성하도록 방어 코드 추가
             grid_cols = st.columns(len(m_names))
             for index, name in enumerate(m_names):
                 with grid_cols[index]:
@@ -409,93 +409,112 @@ else:
                         sign = "🟢 승인 (+)" if log["type"] == "plus" else "🔴 미이행 (-)"
                         st.write(f"{l_idx+1}. [{sign}] {log['reason']} ➔ **{log['val']:,} P 변동**")
 
-    # 📅 탭 4: 달력 일정 관리 및 승인/반려 멀티 선택 트리거 구현
+    # 📅 탭 4: 달력 일정 관리 (하루 다중 등록 지원 및 깔끔한 기호 버튼 개편)
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         start, end = data["start_date"], data["end_date"]
         date_list = [start + timedelta(days=i) for i in range((end - start).days + 1)]
         date_strs = [str(d) for d in date_list]
         
-        selected_date_str = st.selectbox("날짜 선택", date_strs)
-        # [수정 반영]: 최초 일정 등록 시 결재 상태 기본값은 '⏳ 미결재' 상태로 지정
-        current_event = data["calendar_events"].get(selected_date_str, {"content": "등록된 일이 없습니다.", "status": "⏳ 미결재", "worker": m_names[0] if m_names else "없음"})
-        
-        col_ev1, col_ev2 = st.columns(2)
-        with col_ev1:
-            event_input = st.text_input("할 일 명칭", value=current_event["content"])
-        with col_ev2:
-            worker_input = st.selectbox("업무 담당자", m_names, index=m_names.index(current_event.get("worker", m_names[0])) if m_names and current_event.get("worker") in m_names else 0)
+        col_reg1, col_reg2, col_reg3 = st.columns([2, 2, 4])
+        with col_reg1:
+            selected_date_str = st.selectbox("날짜 선택", date_strs, key="sel_date")
+        with col_reg2:
+            worker_input = st.selectbox("업무 담당자", m_names, key="sel_worker")
+        with col_reg3:
+            event_input = st.text_input("할 일 명칭 입력", placeholder="예: 대본 작성, ppt 제작 등", key="sel_content")
             
-        if st.button("일정 저장"):
-            # 새로 등록할 때 기존 결재 이력이 없다면 기본값을 대기 상태로 지정
-            data["calendar_events"][selected_date_str] = {
-                "content": event_input,
-                "status": "⏳ 미결재",
-                "worker": worker_input
-            }
-            save_data(data)
-            st.success("일정이 정상 등록되었습니다. 하단 결재창에서 승인/반려를 진행해 주세요.")
-            st.rerun()
+        if st.button("➕ 새로운 업무 등록/추가"):
+            if not event_input.strip():
+                st.error("할 일 명칭을 입력해 주세요.")
+            else:
+                if selected_date_str not in data["calendar_events"]:
+                    data["calendar_events"][selected_date_str] = []
+                
+                # 리스트 형태로 어펜드하여 중복 덮어쓰기 완전 방지
+                data["calendar_events"][selected_date_str].append({
+                    "id": len(data["calendar_events"][selected_date_str]),
+                    "content": event_input.strip(),
+                    "status": "⏳ 대기",
+                    "worker": worker_input
+                })
+                save_data(data)
+                st.success(f"🎉 {selected_date_str}에 {worker_input}님의 [{event_input}] 업무가 추가되었습니다!")
+                st.rerun()
             
         st.write("---")
-        st.markdown("#### 📋 조장 전용 최종 업무 승인 결재 리스트 (V / X 선택형 관리)")
+        st.markdown("#### 📋 조장 전용 최종 업무 승인 결재 리스트")
         
+        # 전체 날짜를 순회하며 등록된 모든 다중 일정을 출력
         for d_str in date_strs:
-            ev = data["calendar_events"].get(d_str, {"content": "등록된 일이 없습니다.", "status": "⏳ 미결재", "worker": "없음"})
-            c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 3.5, 1.5, 1, 1])
+            day_events = data["calendar_events"].get(d_str, [])
             
-            with c_d: st.write(d_str)
-            with c_w: st.write(f"👤 {ev['worker']}")
-            with c_c: st.write(ev["content"])
-            with c_s: 
-                # 현재 상태에 따른 가시적인 배지 처리
-                if ev["status"] == "✔️ 승인 완료":
-                    st.markdown("<span style='color:#2ec4b6; font-weight:bold;'>✔️ 승인 완료</span>", unsafe_allow_html=True)
-                elif ev["status"] == "❌ 미이행 반려":
-                    st.markdown("<span style='color:#e71d36; font-weight:bold;'>❌ 미이행 반려</span>", unsafe_allow_html=True)
-                else:
-                    st.markdown("<span style='color:orange;'>⏳ 미결재 대기</span>", unsafe_allow_html=True)
+            if not day_events:
+                # 등록된 업무가 아예 없는 날짜의 디폴트 가이드 라인
+                c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4, 1.5, 0.7, 0.7])
+                with c_d: st.write(d_str)
+                with c_w: st.write("👤 없음")
+                with c_c: st.write("등록된 일이 없습니다.")
+                with c_s: st.markdown("<span style='color:gray;'>-</span>", unsafe_allow_html=True)
+                with c_b1: st.write("")
+                with c_b2: st.write("")
+            else:
+                # 해당 날짜에 등록된 여러 개의 일정을 하나씩 하단에 나란히 풀어서 렌더링
+                for ev in day_events:
+                    # 완벽한 한 줄 유지를 위해 컬럼 너비 재조정 (글자 없는 아이콘 버튼 배치)
+                    c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4, 1.5, 0.7, 0.7])
                     
-            with c_b1:
-                # 할 일이 할당되어 있고, 아직 승인 상태가 아닐 때 활성화되는 [승인] 버튼
-                if ev["content"] != "등록된 일이 없습니다." and ev["status"] != "✔️ 승인 완료":
-                    if st.button("✔️ 승인", key=f"v_btn_{d_str}"):
-                        data["calendar_events"][d_str]["status"] = "✔️ 승인 완료"
-                        target_worker = ev["worker"]
-                        
-                        if target_worker in data["stocks"]:
-                            current_p = data["stocks"][target_worker][-1]
-                            data["stocks"][target_worker].append(current_p + 3000)
-                            data["stock_logs"][target_worker].append({
-                                "type": "plus",
-                                "val": 3000,
-                                "reason": f"{d_str} [{ev['content']}] 과제 완수"
-                            })
-                        save_data(data)
-                        st.rerun()
-                else:
-                    st.write("")
-                    
-            with c_b2:
-                # 할 일이 할당되어 있고, 아직 반려 상태가 아닐 때 활성화되는 [반려] 버튼
-                if ev["content"] != "등록된 일이 없습니다." and ev["status"] != "❌ 미이행 반려":
-                    if st.button("❌ 반려", key=f"x_btn_{d_str}"):
-                        data["calendar_events"][d_str]["status"] = "❌ 미이행 반려"
-                        target_worker = ev["worker"]
-                        
-                        if target_worker in data["stocks"]:
-                            current_p = data["stocks"][target_worker][-1]
-                            next_p = max(1000, current_p - 3000)
-                            data["stocks"][target_worker].append(next_p)
-                            data["stock_logs"][target_worker].append({
-                                "type": "minus",
-                                "val": 3000,
-                                "reason": f"{d_str} [{ev['content']}] 미이행 경고"
-                            })
-                        save_data(data)
-                        st.rerun()
-                else:
-                    st.write("")
+                    with c_d: st.write(d_str)
+                    with c_w: st.write(f"👤 {ev['worker']}")
+                    with c_c: st.write(ev["content"])
+                    with c_s: 
+                        if ev["status"] == "✔️ 승인":
+                            st.markdown("<span style='color:#2ec4b6; font-weight:bold;'>✔️ 승인 완료</span>", unsafe_allow_html=True)
+                        elif ev["status"] == "❌ 반려":
+                            st.markdown("<span style='color:#e71d36; font-weight:bold;'>❌ 미이행 반려</span>", unsafe_allow_html=True)
+                        else:
+                            st.markdown("<span style='color:orange;'>⏳ 결재 대기</span>", unsafe_allow_html=True)
+                            
+                    with c_b1:
+                        # 글자를 제거하고 오직 체크 아이콘만 있는 가로 정렬 버튼 구현
+                        if ev["status"] != "✔️ 승인":
+                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}", help="과제 완수 승인"):
+                                ev["status"] = "✔️ 승인"
+                                target_worker = ev["worker"]
+                                
+                                if target_worker in data["stocks"]:
+                                    current_p = data["stocks"][target_worker][-1]
+                                    data["stocks"][target_worker].append(current_p + 3000)
+                                    data["stock_logs"][target_worker].append({
+                                        "type": "plus",
+                                        "val": 3000,
+                                        "reason": f"{d_str} [{ev['content']}] 승인완료"
+                                    })
+                                save_data(data)
+                                st.rerun()
+                        else:
+                            st.write("")
+                            
+                    with c_b2:
+                        # 글자를 제거하고 오직 X 아이콘만 있는 가로 정렬 버튼 구현
+                        if ev["status"] != "❌ 반려":
+                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}", help="과제 미이행 반려"):
+                                ev["status"] = "❌ 반려"
+                                target_worker = ev["worker"]
+                                
+                                if target_worker in data["stocks"]:
+                                    current_p = data["stocks"][target_worker][-1]
+                                    next_p = max(1000, current_p - 3000)
+                                    data["stocks"][target_worker].append(next_p)
+                                    data["stock_logs"][target_worker].append({
+                                        "type": "minus",
+                                        "val": 3000,
+                                        "reason": f"{d_str} [{ev['content']}] 미이행 패널티"
+                                    })
+                                save_data(data)
+                                st.rerun()
+                        else:
+                            st.write("")
 
     # 👥 탭 5: 조원 정보 수정창
     with tab5:
