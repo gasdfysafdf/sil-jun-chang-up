@@ -251,27 +251,47 @@ else:
         "💬 다중 대상 DM방"
     ])
     
-    # 탭 1: 공지사항 게시판
+    # 탭 1: 공지사항 게시판 (파일 실제 열기/다운로드 기능 적용)
     with tab1:
         st.subheader("📌 팀 공지사항 관리")
         with st.form("notice_form", clear_on_submit=True):
             notice_text = st.text_area("공지글 내용을 입력하세요.")
-            uploaded_file = st.file_uploader("공지 첨부파일 (선택사항)")
+            uploaded_file = st.file_uploader("공지 첨부파일")
             submit_notice = st.form_submit_button("공지 등록")
             if submit_notice and notice_text.strip():
-                file_info = uploaded_file.name if uploaded_file else "첨부 파일 없음"
+                file_name = "첨부 파일 없음"
+                file_bytes = None
+                if uploaded_file is not None:
+                    file_name = uploaded_file.name
+                    file_bytes = uploaded_file.read()
+                    
                 data["notices"].insert(0, {
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "content": notice_text,
-                    "file": file_info
+                    "file_name": file_name,
+                    "file_bytes": file_bytes
                 })
                 save_data(data)
                 st.success("공지가 등록되었습니다.")
                 st.rerun()
         
         st.write("---")
-        for n in data["notices"]:
-            st.info(f"📅 {n['date']}\n\n{n['content']}\n\n📎 파일: {n['file']}")
+        st.markdown("#### 📋 등록된 공지 목록")
+        for idx, n in enumerate(data["notices"]):
+            with st.container(border=True):
+                st.caption(f"📅 {n['date']}")
+                st.write(n["content"])
+                
+                # 파일 다운로드 버튼 배치로 조원들이 즉시 열어볼 수 있도록 수정
+                if n.get("file_bytes") is not None:
+                    st.download_button(
+                        label=f"📎 파일 열기/다운로드 ({n['file_name']})",
+                        data=n["file_bytes"],
+                        file_name=n["file_name"],
+                        key=f"notice_file_{idx}"
+                    )
+                else:
+                    st.caption("📎 첨부 파일 없음")
 
     # 탭 2: 피드 광장
     with tab2:
@@ -350,20 +370,19 @@ else:
                                 save_data(data)
                                 st.rerun()
 
-    # 📊 탭 3: 기여도 주식 차트 대시보드
+    # 📊 탭 3: 기여도 주식 차트 대시보드 (StreamlitInvalidColumnSpecError 원천 방어)
     with tab3:
         st.subheader("📊 실시간 팀플 기여도 지표 (주식형 대시보드)")
         
-        if not m_names:
-            st.info("조원 정보가 설정되면 차트가 활성화됩니다.")
+        # [🔥 방어 로직]: 만약 딕셔너리가 비어있거나 키 개수가 0개면 컬럼 생성을 패스하여 에러 차단
+        if not data.get("stocks") or len(data["stocks"]) == 0:
+            st.info("조원 정보가 설정되면 차트가 실시간 활성화됩니다.")
         else:
             st.markdown("### 🚨 실시간 조원별 거래 현황 및 변동 지표")
             
-            grid_cols = st.columns(len(m_names))
-            for index, name in enumerate(m_names):
+            grid_cols = st.columns(len(data["stocks"]))
+            for index, name in enumerate(data["stocks"].keys()):
                 with grid_cols[index]:
-                    if name not in data["stocks"]:
-                        data["stocks"][name] = [10000]
                     if name not in data["stock_logs"]:
                         data["stock_logs"][name] = []
                         
@@ -386,7 +405,7 @@ else:
             
             st.write("---")
             st.markdown("### 📈 조원별 기여도 주식 차트")
-            selected_stock_user = st.selectbox("조원을 선택하세요", m_names)
+            selected_stock_user = st.selectbox("조원을 선택하세요", list(data["stocks"].keys()))
             
             if selected_stock_user:
                 user_history = data["stocks"][selected_stock_user]
@@ -396,7 +415,7 @@ else:
                 }).set_index("거래 차수")
                 st.line_chart(chart_df)
 
-    # 📅 탭 4: 달력 일정 관리 (글씨 전면 제거 버전)
+    # 📅 탭 4: 달력 일정 관리 (대문자 St 오타 완전 교정본)
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         start, end = data["start_date"], data["end_date"]
@@ -407,7 +426,7 @@ else:
         with col_reg1:
             selected_date_str = st.selectbox("날짜 선택", date_strs, key="sel_date")
         with col_reg2:
-            worker_input = st.selectbox("업무 담당자", m_names, key="sel_worker")
+            worker_input = st.selectbox("업무 담당자", m_names if m_names else ["없음"], key="sel_worker")
         with col_reg3:
             event_input = st.text_input("할 일 명칭 입력", placeholder="예: 대본 작성, ppt 제작 등", key="sel_content")
             
@@ -452,11 +471,10 @@ else:
                 with c_b2: st.write("")
             else:
                 for ev in day_events:
-                    # [🎯 핵심 변경]: 한글 설명 문구를 전면 빼버리고 오직 기호만 표기하여 줄바꿈 완전 방지
                     c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 5.0, 1.0, 0.5, 0.5])
                     
                     with c_d: st.write(d_str)
-                    with c_w: St.write(f"👤 {ev['worker']}")
+                    with c_w: st.write(f"👤 {ev['worker']}")  # [오타 완벽 교정] St.write -> st.write
                     with c_c: st.write(ev["content"])
                     with c_s: 
                         if "✔️" in ev["status"]:
