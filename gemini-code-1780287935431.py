@@ -38,7 +38,10 @@ if "app_data" not in st.session_state:
             "notices": [],
             "chats": [],
             "stories": [],  
-            "stocks": {}                   
+            # stocks 구조: {"이름": [히스토리 리스트]} -> 변동 추이를 보기 위해 최초 10000 시작
+            "stocks": {},
+            # log 구조: {"이름": [{"type": "plus/minus", "val": 3000, "reason": "내용"}]}
+            "stock_logs": {} 
         }
 
 data = st.session_state.app_data
@@ -72,11 +75,11 @@ with st.sidebar:
             "subject": "",
             "start_date": datetime.today().date(),
             "end_date": datetime.today().date() + timedelta(days=7),
-            "calendar_events": {}, "notices": [], "chats": [], "stories": [], "stocks": {}
+            "calendar_events": {}, "notices": [], "chats": [], "stories": [], "stocks": {}, "stock_logs": {}
         }
         st.rerun()
 
-# 1. 로그인 화면 (재로그인 판단 로직 추가)
+# 1. 로그인 화면 (세팅 완료 여부에 따른 조건부 홈 진입 로직 유지)
 if data["step"] == "auth_login":
     st.title("🔐 스타트리 조장 로그인")
     st.caption("대학생 팀플 라이트 ERP 스타트리 MVP 시연 버전입니다.")
@@ -90,11 +93,11 @@ if data["step"] == "auth_login":
             if login_id in data["users_db"] and data["users_db"][login_id] == login_pw:
                 data["current_user"] = login_id
                 
-                # 핵심 조건 체크: 이미 팀 설정을 완료한 적이 있다면 바로 홈화면으로 전송
+                # 가입 직후 세팅이 이미 끝난 계정인지 검증하여 다이렉트 패스
                 if data["team_name"].strip() and data["members"]:
                     data["step"] = "main_home"
                 else:
-                    data["step"] = "setup_1" # 아예 처음 가입한 거면 설정 단계로 이동
+                    data["step"] = "setup_1"
                     
                 save_data(data)
                 st.success("로그인 성공!")
@@ -229,6 +232,7 @@ elif data["step"] == "setup_link":
         for m in data["members"]:
             if m["이름"] and m["이름"] not in data["stocks"]:
                 data["stocks"][m["이름"]] = [10000]
+                data["stock_logs"][m["이름"]] = []
         data["step"] = "main_home"
         save_data(data)
         st.rerun()
@@ -272,7 +276,7 @@ else:
         for n in data["notices"]:
             st.info(f"📅 {n['date']}\n\n{n['content']}\n\n📎 파일: {n['file']}")
 
-    # 탭 2: 피드 광장 ('인증할 조원' 완전 삭제 상태 유지)
+    # 탭 2: 피드 광장
     with tab2:
         st.subheader("📸 나의 팀플 스토리 업로드")
         col_up, col_view = st.columns([2, 3])
@@ -349,17 +353,74 @@ else:
                                 save_data(data)
                                 st.rerun()
 
-    # 탭 3: 기여도 주식 차트
+    # 📥 [개편 요청 반영] 탭 3: 무임승차가 한눈에 보이는 기여도 주식 차트 대시보드
     with tab3:
-        st.subheader("📈 실시간 팀플 기여도 지표")
-        valid_stocks = {k: v for k, v in data["stocks"].items() if k in m_names}
-        if valid_stocks:
-            stock_df = pd.DataFrame(dict([ (k, pd.Series(v)) for k, v in valid_stocks.items() ]))
-            st.line_chart(stock_df)
-        else:
+        st.subheader("📊 실시간 팀플 기여도 지표 (주식형 대시보드)")
+        st.caption("달력 일정 관리에서 조장이 결재를 승인(✔️)하면 주가가 폭등하고, 미이행(❌) 처리 시 주가가 폭락하여 기여도가 실시간 반영됩니다.")
+        
+        if not m_names:
             st.info("조원 정보가 설정되면 차트가 활성화됩니다.")
+        else:
+            # 1단계: 상단에 조원 이름 및 실시간 상벌 포인트 변동 안내 내역 (+/-) 배치
+            st.markdown("### 🚨 실시간 조원별 거래 현황 및 변동 지표")
+            
+            grid_cols = st.columns(len(m_names))
+            for index, name in enumerate(m_names):
+                with grid_cols[index]:
+                    # 안전을 위해 데이터 확보 확인
+                    if name not in data["stocks"]:
+                        data["stocks"][name] = [10000]
+                    if name not in data["stock_logs"]:
+                        data["stock_logs"][name] = []
+                        
+                    current_val = data["stocks"][name][-1]
+                    logs = data["stock_logs"][name]
+                    
+                    # 카드 형태 구성
+                    with st.container(border=True):
+                        # 조장 마크 표시
+                        role_tag = "👑 조장" if name == leader_name else "👤 조원"
+                        st.markdown(f"**{name}** `{role_tag}`")
+                        st.markdown(f"현재 기여도: **{current_val:,} P**")
+                        
+                        # 가장 최근 발생한 로그 추적 후 컬러 매치 출력
+                        if logs:
+                            last_log = logs[-1]
+                            if last_log["type"] == "plus":
+                                st.markdown(f"<span style='color:#2ec4b6; font-weight:bold;'>▲ +{last_log['val']:,} P</span><br><small style='color:gray;'>{last_log['reason']}</small>", unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"<span style='color:#e71d36; font-weight:bold;'>▼ -{last_log['val']:,} P</span><br><small style='color:gray;'>{last_log['reason']}</small>", unsafe_allow_html=True)
+                        else:
+                            st.caption("🔄 변동 내역 아직 없음")
+            
+            st.write("---")
+            
+            # 2단계: 개별 조원 선택 시 상세 변동 추이 주식 차트 바인딩
+            st.markdown("### 📈 조원별 기여도 개별 주식 차트 조회")
+            selected_stock_user = st.selectbox("📊 상세 변동 그래프를 확인하려는 조원을 클릭하세요", m_names)
+            
+            if selected_stock_user:
+                user_history = data["stocks"][selected_stock_user]
+                
+                # 라인 차트를 그리기 위한 데이터프레임 가공 (실제 주식차트처럼 우상향/우하향 연출)
+                chart_df = pd.DataFrame({
+                    "거래 차수": [f"{i}차 변동" for i in range(len(user_history))],
+                    "기여도 가치 (P)": user_history
+                })
+                chart_df = chart_df.set_index("거래 차수")
+                
+                st.line_chart(chart_df)
+                
+                # 하단에 해당 조원이 수행한 변동 기록 상세 타임라인 파싱
+                st.markdown(f"📋 **{selected_stock_user}** 조원의 전체 변동 이력 로그")
+                if not data["stock_logs"][selected_stock_user]:
+                    st.caption("표시할 상세 기록이 없습니다.")
+                else:
+                    for l_idx, log in enumerate(reversed(data["stock_logs"][selected_stock_user])):
+                        sign = "🟢 승인 (+)" if log["type"] == "plus" else "🔴 미이행 (-)"
+                        st.write(f"{l_idx+1}. [{sign}] {log['reason']} ➔ **{log['val']:,} P 변동**")
 
-    # 탭 4: 달력 일정 관리
+    # 탭 4: 달력 일정 관리 및 승인 시 주가 변동 트리거 연동
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         start, end = data["start_date"], data["end_date"]
@@ -386,7 +447,7 @@ else:
             st.rerun()
             
         st.write("---")
-        st.markdown("#### 📋 조장 전용 최종 업무 승인 결재 리스트")
+        st.markdown("#### 📋 조장 전용 최종 업무 승인 결재 리스트 (체크 시 주가 변동)")
         for d_str in date_strs:
             ev = data["calendar_events"].get(d_str, {"content": "등록된 일이 없습니다.", "status": "❌", "worker": "없음"})
             c_d, c_w, c_c, c_s = st.columns([2, 2, 4, 2])
@@ -396,13 +457,32 @@ else:
             with c_s:
                 if st.button(f"결재 상태: {ev['status']}", key=f"cal_f_btn_{d_str}"):
                     if ev["content"] != "등록된 일이 없습니다.":
+                        # 상태 반전 전환
                         new_status = "❌" if ev["status"] == "✔️" else "✔️"
                         data["calendar_events"][d_str]["status"] = new_status
                         
                         target_worker = ev["worker"]
                         if target_worker in data["stocks"]:
                             current_p = data["stocks"][target_worker][-1]
-                            data["stocks"][target_worker].append(current_p + 3000 if new_status == "✔️" else max(1000, current_p - 3000))
+                            
+                            # 주식 차트 오르내림을 기획서에 맞춰 하드코딩 반영
+                            if new_status == "✔️":
+                                # 업무를 수행하여 승인받았을 때: +3,000P 폭등 및 로그 적재
+                                data["stocks"][target_worker].append(current_p + 3000)
+                                data["stock_logs"][target_worker].append({
+                                    "type": "plus",
+                                    "val": 3000,
+                                    "reason": f"{d_str} [{ev['content']}] 과제 완수"
+                                })
+                            else:
+                                # 과제를 하지 않아 X표시 처리 혹은 반려 시: -3,000P 폭락 및 로그 적재
+                                next_p = max(1000, current_p - 3000) # 최소 하한선 방어
+                                data["stocks"][target_worker].append(next_p)
+                                data["stock_logs"][target_worker].append({
+                                    "type": "minus",
+                                    "val": 3000,
+                                    "reason": f"{d_str} [{ev['content']}] 미이행 경고"
+                                })
                         save_data(data)
                         st.rerun()
 
@@ -432,6 +512,7 @@ else:
             for m in data["members"]:
                 if m["이름"] and m["이름"] not in data["stocks"]:
                     data["stocks"][m["이름"]] = [10000]
+                    data["stock_logs"][m["이름"]] = []
             save_data(data)
             st.success("수정된 명단이 마스터 데이터베이스에 연동되었습니다.")
             st.rerun()
