@@ -18,32 +18,27 @@ def save_data(data):
     with open(DB_FILE, "wb") as f:
         pickle.dump(data, f)
 
-# 시스템 초기 데이터 구조 설계
 if "app_data" not in st.session_state:
     saved = load_data()
     if saved:
         st.session_state.app_data = saved
     else:
         st.session_state.app_data = {
-            "users_db": {"admin": "1234"},  # 기본 회원 정보 (아이디: 비밀번호)
-            "current_user": None,          # 현재 로그인된 아이디
-            "step": "auth_login",          # 진행 단계 제어
-            "member_count": 3,
-            "members": [
-                {"이름": "김해용", "연락처": "010-7465-0094", "역할": "팀장 / 기획 총괄"},
-                {"이름": "장현석", "연락처": "010-3973-5056", "역할": "프론트엔드 / UI UX 디자인"},
-                {"이름": "조성우", "연락처": "010-8823-1637", "역할": "백엔드 / 로직 데이터 처리"}
-            ],
+            "users_db": {},               
+            "current_user": None,          
+            "step": "auth_login",          
+            "member_count": 1,
+            "members": [],                 
             "leader_idx": 0,
-            "team_name": "YSW",
-            "subject": "대학생 맞춤형 가벼운 팀 프로젝트 관리 ERP 시스템 개발",
+            "team_name": "",
+            "subject": "",
             "start_date": datetime.today().date(),
-            "end_date": datetime.today().date() + timedelta(days=14),
+            "end_date": datetime.today().date() + timedelta(days=7),
             "calendar_events": {}, 
             "notices": [],
             "chats": [],
             "stories": [],  
-            "stocks": {"김해용": [10000], "장현석": [10000], "조성우": [10000]}    
+            "stocks": {}                   
         }
 
 data = st.session_state.app_data
@@ -51,9 +46,9 @@ m_names = [m["이름"] for m in data["members"] if m["이름"]]
 
 # 사이드바 제어창
 with st.sidebar:
-    st.title("🌳 스타트리 조장 모드")
+    st.title("🌳 스타트리 검증 모드")
     if data["current_user"]:
-        st.success(f"🔐 로그인 중: {data['current_user']} (조장)")
+        st.success(f"🔐 로그인 계정: {data['current_user']}")
         if st.button("로그아웃"):
             data["current_user"] = None
             data["step"] = "auth_login"
@@ -63,33 +58,28 @@ with st.sidebar:
         st.warning("로그인이 필요한 상태입니다.")
         
     st.write("---")
-    if st.button("⚠️ 시스템 전체 초기화", help="모든 가상 데이터를 지우고 처음부터 다시 시연합니다."):
+    if st.button("⚠️ 시스템 전체 초기화", help="모든 가상 데이터를 완전히 지우고 처음부터 다시 시연합니다."):
         if os.path.exists(DB_FILE):
             os.remove(DB_FILE)
         st.session_state.app_data = {
-            "users_db": {"admin": "1234"},
+            "users_db": {},
             "current_user": None,
             "step": "auth_login",
-            "member_count": 3,
-            "members": [
-                {"이름": "김해용", "연락처": "010-7465-0094", "역할": "팀장 / 기획 총괄"},
-                {"이름": "장현석", "연락처": "010-3973-5056", "역할": "프론트엔드 / UI UX 디자인"},
-                {"이름": "조성우", "연락처": "010-8823-1637", "역할": "백엔드 / 로직 데이터 처리"}
-            ],
+            "member_count": 1,
+            "members": [],
             "leader_idx": 0,
-            "team_name": "YSW",
-            "subject": "대학생 맞춤형 가벼운 팀 프로젝트 관리 ERP 시스템 개발",
+            "team_name": "",
+            "subject": "",
             "start_date": datetime.today().date(),
-            "end_date": datetime.today().date() + timedelta(days=14),
-            "calendar_events": {}, "notices": [], "chats": [], "stories": [], 
-            "stocks": {"김해용": [10000], "장현석": [10000], "조성우": [10000]}
+            "end_date": datetime.today().date() + timedelta(days=7),
+            "calendar_events": {}, "notices": [], "chats": [], "stories": [], "stocks": {}
         }
         st.rerun()
 
-# [기능 3] 최우선 실행: 로그인 및 중복체크 회원가입 화면 생성
+# 1. 로그인 화면 (재로그인 판단 로직 추가)
 if data["step"] == "auth_login":
     st.title("🔐 스타트리 조장 로그인")
-    st.caption("대학생 팀플 라이트 ERP 스타트리에 오신 것을 환영합니다. 조장 계정으로 진입하세요.")
+    st.caption("대학생 팀플 라이트 ERP 스타트리 MVP 시연 버전입니다.")
     
     login_id = st.text_input("아이디", key="login_id_input")
     login_pw = st.text_input("비밀번호", type="password", key="login_pw_input")
@@ -99,26 +89,32 @@ if data["step"] == "auth_login":
         if st.button("로그인하기"):
             if login_id in data["users_db"] and data["users_db"][login_id] == login_pw:
                 data["current_user"] = login_id
-                data["step"] = "setup_1"  # 로그인 성공 시 조원 수 입력 단계로 전환
+                
+                # 핵심 조건 체크: 이미 팀 설정을 완료한 적이 있다면 바로 홈화면으로 전송
+                if data["team_name"].strip() and data["members"]:
+                    data["step"] = "main_home"
+                else:
+                    data["step"] = "setup_1" # 아예 처음 가입한 거면 설정 단계로 이동
+                    
                 save_data(data)
                 st.success("로그인 성공!")
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 틀렸습니다.")
     with col_l2:
-        if st.button("신규 회원가입 창으로 이동"):
+        if st.button("신규 회원가입하러 가기"):
             data["step"] = "auth_register"
             save_data(data)
             st.rerun()
 
+# 2. 회원가입 화면
 elif data["step"] == "auth_register":
     st.title("📝 스타트리 조장 회원가입")
-    st.caption("조장만의 메인 워크스페이스를 생성하기 위해 계정을 등록해 주세요.")
+    st.caption("새로운 팀의 조장 계정을 생성합니다.")
     
     reg_id = st.text_input("생성할 아이디", key="reg_id_input")
     reg_pw = st.text_input("생성할 비밀번호", type="password", key="reg_pw_input")
     
-    # 중복 체크 확인용 세션 상태변수 활성화
     if "id_checked" not in st.session_state:
         st.session_state.id_checked = False
         
@@ -134,51 +130,85 @@ elif data["step"] == "auth_register":
             
     if st.button("회원가입 완료하기"):
         if not st.session_state.id_checked:
-            st.error("회원가입 전 반드시 아이디 중복 확인을 해주셔야 합니다.")
+            st.error("회원가입을 하려면 먼저 아이디 중복 확인을 완료해야 합니다.")
         elif not reg_pw.strip():
             st.error("비밀번호를 입력해 주세요.")
         else:
             data["users_db"][reg_id] = reg_pw
-            data["step"] = "auth_login"  # 완료 시 다시 로그인 창으로 튕겨주기
+            data["step"] = "auth_login"
             save_data(data)
             st.session_state.id_checked = False
-            st.success("회원가입이 완료되었습니다! 로그인 창으로 이동합니다.")
+            st.success("회원가입 완료! 로그인 화면으로 돌아갑니다.")
             st.rerun()
 
-# 정보 세팅 가이드 1단계에서 5단계 (조장 전용 인프라 구축)
+# 3. 조원 수 설정 단계
 elif data["step"] == "setup_1":
     st.title("🚀 스타트리 초기 설정")
     st.subheader("1단계: 팀의 총 인원수를 입력해주세요.")
     count = st.number_input("인원 수 (명)", min_value=1, max_value=20, value=data["member_count"])
     if st.button("다음 단계로"):
         data["member_count"] = count
+        data["members"] = [{"이름": "", "연락처": "", "역할": ""} for _ in range(count)]
         data["step"] = "setup_2"
         save_data(data)
         st.rerun()
 
+# 4. 조원 상세 정보 직접 기입
 elif data["step"] == "setup_2":
     st.title("🚀 스타트리 초기 설정")
-    st.subheader("2단계: 프로젝트 팀 명을 입력해주세요.")
+    st.subheader("2단계: 조원들의 정보를 입력하고 조장을 선택해주세요.")
+    
+    member_names = []
+    for i in range(data["member_count"]):
+        st.markdown(f"#### 👤 조원 {i+1}")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            data["members"][i]["이름"] = st.text_input(f"이름", value=data["members"][i]["이름"], key=f"name_{i}")
+        with col2:
+            data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"phone_{i}")
+        with col3:
+            data["members"][i]["역할"] = st.text_input(f"역할", value=data["members"][i]["역할"], key=f"role_{i}")
+        
+        member_names.append(data["members"][i]["이름"] if data["members"][i]["이름"] else f"조원 {i+1}")
+    
+    st.markdown("---")
+    data["leader_idx"] = st.selectbox("👑 이 팀의 조장(팀장)은 누구인가요?", range(data["member_count"]), format_func=lambda x: member_names[x])
+    
+    if st.button("다음 단계로"):
+        has_empty_name = any(not m["이름"].strip() for m in data["members"])
+        if has_empty_name:
+            st.error("모든 조원의 이름을 올바르게 입력해 주세요.")
+        else:
+            data["step"] = "setup_3"
+            save_data(data)
+            st.rerun()
+
+# 5. 팀 이름 입력 단계
+elif data["step"] == "setup_3":
+    st.title("🚀 스타트리 초기 설정")
+    st.subheader("3단계: 프로젝트 팀 명을 정해주세요.")
     t_name = st.text_input("팀 이름 입력", value=data["team_name"])
     if st.button("다음 단계로"):
         data["team_name"] = t_name if t_name.strip() else "조"
-        data["step"] = "setup_3"
-        save_data(data)
-        st.rerun()
-
-elif data["step"] == "setup_3":
-    st.title("🚀 스타트리 초기 설정")
-    st.subheader("3단계: 이번 팀 프로젝트의 핵심 주제를 적어주세요.")
-    subj = st.text_input("프로젝트 주제/내용", value=data["subject"])
-    if st.button("다음 단계로"):
-        data["subject"] = subj
         data["step"] = "setup_4"
         save_data(data)
         st.rerun()
 
+# 6. 프로젝트 주제 입력 단계
 elif data["step"] == "setup_4":
     st.title("🚀 스타트리 초기 설정")
-    st.subheader("4단계: 조 활동의 마감 기한을 선택해주세요.")
+    st.subheader("4단계: 프로젝트 팀 활동 주제를 입력해주세요.")
+    subj = st.text_input("프로젝트 주제/내용", value=data["subject"])
+    if st.button("다음 단계로"):
+        data["subject"] = subj
+        data["step"] = "setup_5"
+        save_data(data)
+        st.rerun()
+
+# 7. 마감 기한 설정 단계
+elif data["step"] == "setup_5":
+    st.title("🚀 스타트리 초기 설정")
+    st.subheader("5단계: 이번 팀 프로젝트의 마감 기한을 선택해주세요.")
     e_date = st.date_input("마감 날짜 선택", value=data["end_date"])
     if st.button("다음 단계로"):
         data["end_date"] = e_date
@@ -186,30 +216,31 @@ elif data["step"] == "setup_4":
         save_data(data)
         st.rerun()
 
-# [기능 3] 초대에 필요한 조원 공유 전용 가상 링크 발급창 생성
+# 8. 조원 초대용 가상 링크 생성 창
 elif data["step"] == "setup_link":
-    st.title("🔗 조원 초대 링크 발급 완료")
-    st.subheader("조원들에게 아래의 워크스페이스 다이렉트 링크를 공유하세요!")
+    st.title("🔗 조원 초대 링크 생성 완료")
+    st.subheader("다른 조원들에게 아래의 워크스페이스 참여 링크를 공유하세요!")
     
-    # 가상 해시 링크 생성 시뮬레이션
-    v_link = f"https://startree.app/workspace/join?team={data['team_name']}&code=auth_token_ysw7465"
+    v_link = f"https://startree.app/workspace/join?team={data['team_name']}&id=master_shared"
     st.info(v_link)
-    st.caption("링크를 받은 조원들은 별도의 회원가입이나 로그인 없이 즉시 홈화면에 합류하여 참여할 수 있습니다.")
+    st.caption("초대받은 조원들은 복잡한 가입 절차 없이, 이 링크 하나로 즉시 홈화면에 바로 접속할 수 있습니다.")
     
     if st.button("🎉 링크 복사 확인 및 홈화면 진입"):
+        for m in data["members"]:
+            if m["이름"] and m["이름"] not in data["stocks"]:
+                data["stocks"][m["이름"]] = [10000]
         data["step"] = "main_home"
         save_data(data)
         st.rerun()
 
-# 메인 홈 대시보드 화면 연동
+# 9. 메인 워크스페이스 홈화면
 else:
-    leader_name = "조장"
+    leader_name = data["members"][data["leader_idx"]]["이름"] if data["members"] else "미정"
     
     st.title(f"🌳 {data['team_name']} 워크스페이스")
-    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 관리 권한:** {data['current_user']} 조장 계정 마스터 제어")
+    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 조장:** {leader_name} | **👤 로그인 상태:** {data['current_user']} (마스터 권한)")
     st.write("---")
 
-    # 탭 메뉴 구조 개편 (피드, 차트, 달력, 조원정보, DM방 개별화)
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📢 팀 홈 및 공지사항", 
         "✨ 스토리 피드 광장", 
@@ -219,7 +250,7 @@ else:
         "💬 다중 대상 DM방"
     ])
     
-    # 탭 1: 공지사항
+    # 탭 1: 공지사항 게시판
     with tab1:
         st.subheader("📌 팀 공지사항 관리")
         with st.form("notice_form", clear_on_submit=True):
@@ -241,19 +272,18 @@ else:
         for n in data["notices"]:
             st.info(f"📅 {n['date']}\n\n{n['content']}\n\n📎 파일: {n['file']}")
 
-    # 탭 2: 스토리 소통 피드 ([기능 1] '인증할 조원' 선택 칸 완벽하게 제거함)
+    # 탭 2: 피드 광장 ('인증할 조원' 완전 삭제 상태 유지)
     with tab2:
         st.subheader("📸 나의 팀플 스토리 업로드")
-        
         col_up, col_view = st.columns([2, 3])
         
         with col_up:
-            st.markdown("#### 📤 오늘의 작업 현황 피드 올리기")
+            st.markdown("#### 📤 오늘의 프로젝트 진행 상황 피드 게시")
             with st.form("story_upload_form", clear_on_submit=True):
-                st_text = st.text_area("조장님, 오늘 처리한 업무를 한 줄로 인증해 보세요.")
+                st_text = st.text_area("조장님, 오늘 완료한 업무 내용을 한 줄 요약해 보세요.")
                 st_media = st.file_uploader("사진, 영상, 음악 미디어 파일 첨부", type=["png", "jpg", "jpeg", "mp4", "mp3", "wav"])
                 
-                submit_story = st.form_submit_button("스토리 등록")
+                submit_story = st.form_submit_button("스토리 피드 게시")
                 if submit_story and st_text.strip():
                     media_type = None
                     media_data = None
@@ -270,7 +300,7 @@ else:
                             media_type = "audio"
                             
                     data["stories"].insert(0, {
-                        "user": f"{data['current_user']}(조장)", 
+                        "user": f"{leader_name}(조장)", 
                         "content": st_text,
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "media_type": media_type,
@@ -284,9 +314,9 @@ else:
                     st.rerun()
                     
         with col_view:
-            st.markdown("#### 📱 다른 조원들이 올린 실시간 피드 구경")
+            st.markdown("#### 📱 실시간 스토리 피드 목록")
             if not data["stories"]:
-                st.caption("아직 올라온 스토리 피드가 없습니다.")
+                st.caption("아직 게시된 스토리 피드가 없습니다.")
             else:
                 for idx, s in enumerate(data["stories"]):
                     with st.container(border=True):
@@ -300,7 +330,6 @@ else:
                         elif s.get("media_type") == "audio":
                             st.audio(s["media_data"])
                             
-                        # 하트 좋아요 기능 연동
                         if st.button(f"❤️ 좋아요 {s.get('likes', 0)}개", key=f"like_b_{idx}"):
                             s["likes"] = s.get("likes", 0) + 1
                             save_data(data)
@@ -311,23 +340,26 @@ else:
                             st.markdown(f"**{cm['writer']}**: {cm['text']}")
                             
                         with st.form(f"comment_f_{idx}", clear_on_submit=True):
-                            c_text = st.text_input("댓글 작성하기", key=f"cm_t_{idx}")
-                            if st.form_submit_button("댓글 달기") and c_text.strip():
+                            c_text = st.text_input("댓글 남기기", key=f"cm_t_{idx}")
+                            if st.form_submit_button("댓글 등록") and c_text.strip():
                                 s["comments"].append({
-                                    "writer": f"{data['current_user']}(조장)",
+                                    "writer": f"{leader_name}(조장)",
                                     "text": c_text
                                 })
                                 save_data(data)
                                 st.rerun()
 
-    # 탭 3: 기여도 차트
+    # 탭 3: 기여도 주식 차트
     with tab3:
         st.subheader("📈 실시간 팀플 기여도 지표")
-        if data["stocks"]:
-            stock_df = pd.DataFrame(dict([ (k, pd.Series(v)) for k, v in data["stocks"].items() ]))
+        valid_stocks = {k: v for k, v in data["stocks"].items() if k in m_names}
+        if valid_stocks:
+            stock_df = pd.DataFrame(dict([ (k, pd.Series(v)) for k, v in valid_stocks.items() ]))
             st.line_chart(stock_df)
+        else:
+            st.info("조원 정보가 설정되면 차트가 활성화됩니다.")
 
-    # 탭 4: 달력 일정 관리 및 조장 승인 권한
+    # 탭 4: 달력 일정 관리
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         start, end = data["start_date"], data["end_date"]
@@ -335,13 +367,13 @@ else:
         date_strs = [str(d) for d in date_list]
         
         selected_date_str = st.selectbox("날짜 선택", date_strs)
-        current_event = data["calendar_events"].get(selected_date_str, {"content": "등록된 일이 없습니다.", "status": "❌", "worker": "김해용"})
+        current_event = data["calendar_events"].get(selected_date_str, {"content": "등록된 일이 없습니다.", "status": "❌", "worker": m_names[0] if m_names else "없음"})
         
         col_ev1, col_ev2 = st.columns(2)
         with col_ev1:
             event_input = st.text_input("할 일 명칭", value=current_event["content"])
         with col_ev2:
-            worker_input = st.selectbox("업무 담당자", m_names, index=m_names.index(current_event.get("worker", m_names[0])) if current_event.get("worker") in m_names else 0)
+            worker_input = st.selectbox("업무 담당자", m_names, index=m_names.index(current_event.get("worker", m_names[0])) if m_names and current_event.get("worker") in m_names else 0)
             
         if st.button("일정 저장"):
             data["calendar_events"][selected_date_str] = {
@@ -374,50 +406,57 @@ else:
                         save_data(data)
                         st.rerun()
 
-    # [기능 2] 탭 5: 조원 정보 수정 전용 칸 독립 분리
+    # 분리 반영 1: 독립된 조원 정보 수정 칸
     with tab5:
-        st.subheader("👥 조원 명부 수정 및 인적 사항 관리 관리")
-        st.caption("보내주신 두 번째 첨부 스크린샷 화면 구조의 결함을 개선하여, 조원 정보를 대화방과 분리해 완전히 독립된 수정 전용 페이지로 개편했습니다.")
+        st.subheader("👥 조원 명부 관리 (수정 전용 공간)")
         
+        edit_team_name = st.text_input("조 이름 변경", value=data["team_name"])
+        edit_subject = st.text_input("프로젝트 주제 변경", value=data["subject"])
+        if st.button("기본 팀 정보 수정확인"):
+            data["team_name"] = edit_team_name
+            data["subject"] = edit_subject
+            save_data(data)
+            st.success("팀 메인 정보가 성공적으로 변경되었습니다.")
+            st.rerun()
+            
+        st.write("---")
         for i in range(len(data["members"])):
-            st.markdown(f"#### 👤 조원 명단 정보 {i+1}")
+            is_leader_mark = " (👑 조장)" if i == data["leader_idx"] else ""
+            st.markdown(f"#### 👤 조원 {i+1}{is_leader_mark} 정보 관리")
             data["members"][i]["이름"] = st.text_input(f"성명", value=data["members"][i]["이름"], key=f"fixed_n_{i}")
             data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"fixed_p_{i}")
-            data["members"][i]["역할"] = st.text_input(f"담당 분담 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
+            data["members"][i]["역할"] = st.text_input(f"담당 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
             st.write("---")
             
-        if st.button("👥 조원 명단 데이터 최종 동기화"):
+        if st.button("👥 조원 명단 데이터베이스 동기화 저장"):
             for m in data["members"]:
                 if m["이름"] and m["이름"] not in data["stocks"]:
                     data["stocks"][m["이름"]] = [10000]
             save_data(data)
-            st.success("조원 인적정보 데이터베이스 수정이 완료되었습니다.")
+            st.success("수정된 명단이 마스터 데이터베이스에 연동되었습니다.")
             st.rerun()
 
-    # [기능 2] 탭 6: 다중 전송 기능을 결합한 독립형 단체 DM 대화방 생성
+    # 분리 반영 2: 다중 발송 기능이 결합된 DM방 탭
     with tab6:
-        st.subheader("💬 다중 대상 동시 전송 DM 솔루션")
-        st.caption("한 명씩만 지정해 보내야 했던 기존 시스템을 파괴하고, 여러 명의 수신자를 동시에 복수 체크하여 한 번에 메시지를 전송할 수 있도록 강화했습니다.")
+        st.subheader("💬 다중 대상 동시 전송 DM 채널")
         
-        chat_box = st.container(height=250)
+        chat_box = st.container(height=300)
         with chat_box:
             for c in data["chats"]:
-                st.markdown(f"**[{c['sender']} -> {c['receivers']}]** *{c['time']}*")
+                st.markdown(f"**[{c['sender']} ➔ 수신자: {c['receivers']}]** *{c['time']}*")
                 st.info(c["msg"])
                 
         with st.form("multi_dm_form", clear_on_submit=True):
-            # 조원 리스트에서 다중 선택(Multi-select) 콤보박스 적용
-            selected_receivers = st.multiselect("📥 메시지를 수신할 조원들을 선택하세요 (중복 체크 다중 전송 가능)", m_names, default=m_names)
+            selected_receivers = st.multiselect("📥 메시지를 보낼 수신자 조원들을 선택하세요 (다중 체크)", m_names, default=m_names)
+            dm_msg = st.text_input("DM 메시지 내용 작성", placeholder="선택한 여러 명의 조원에게 메시지를 동시에 발송합니다.")
             
-            dm_msg = st.text_input("메시지 입력 내용", placeholder="선택한 모든 조원에게 실시간 단체 DM을 발송합니다.")
-            
-            if st.form_submit_button("🚀 단체 DM 동시 발송") and dm_msg.strip():
+            if st.form_submit_button("🚀 다중 대상 DM 발송") and dm_msg.strip():
                 if not selected_receivers:
-                    st.error("수신할 대상을 최소 1명 이상 선택해 주세요.")
+                    st.error("메시지를 전송할 대상을 최소 1명 이상 선택하셔야 합니다.")
                 else:
                     receiver_str = ", ".join(selected_receivers)
                     data["chats"].append({
-                        "sender": f"{data['current_user']}(조장)",
+                        "sender": f"{leader_name}(조장)",
                         "receivers": receiver_str,
                         "msg": dm_msg,
                         "time": datetime.now().strftime("%H:%M")
