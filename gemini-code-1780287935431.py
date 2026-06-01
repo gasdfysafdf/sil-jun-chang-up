@@ -59,7 +59,7 @@ with st.sidebar:
         st.warning("로그인이 필요한 상태입니다.")
         
     st.write("---")
-    if st.button("⚠️ 시스템 전체 초기화", help="모든 가상 데이터를 완전히 지우고 처음부터 다시 시연합니다."):
+    if st.button("⚠️ 시스템 전체 초기화"):
         if os.path.exists(DB_FILE):
             os.remove(DB_FILE)
         st.session_state.app_data = {
@@ -239,7 +239,7 @@ else:
     leader_name = data["members"][data["leader_idx"]]["이름"] if data["members"] else "미정"
     
     st.title(f"🌳 {data['team_name']} 워크스페이스")
-    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 조장:** {leader_name} | **👤 로그인 상태:** {data['current_user']} (마스터 권한)")
+    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 조장:** {leader_name}")
     st.write("---")
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -281,7 +281,7 @@ else:
         with col_up:
             st.markdown("#### 📤 오늘의 프로젝트 진행 상황 피드 게시")
             with st.form("story_upload_form", clear_on_submit=True):
-                st_text = st.text_area("조장님, 오늘 완료한 업무 내용을 한 줄 요약해 보세요.")
+                st_text = st.text_area("오늘 완료한 업무 내용을 한 줄 요약해 보세요.")
                 st_media = st.file_uploader("사진, 영상, 음악 미디어 파일 첨부", type=["png", "jpg", "jpeg", "mp4", "mp3", "wav"])
                 
                 submit_story = st.form_submit_button("스토리 피드 게시")
@@ -353,7 +353,6 @@ else:
     # 📊 탭 3: 기여도 주식 차트 대시보드
     with tab3:
         st.subheader("📊 실시간 팀플 기여도 지표 (주식형 대시보드)")
-        st.caption("달력 일정 관리에서 조장이 업무 수행 여부를 직접 확인 및 결재하면 상벌 포인트가 주가 그래프에 실시간 반영됩니다.")
         
         if not m_names:
             st.info("조원 정보가 설정되면 차트가 활성화됩니다.")
@@ -383,32 +382,21 @@ else:
                             else:
                                 st.markdown(f"<span style='color:#e71d36; font-weight:bold;'>▼ -{last_log['val']:,} P</span><br><small style='color:gray;'>{last_log['reason']}</small>", unsafe_allow_html=True)
                         else:
-                            st.caption("🔄 변동 내역 아직 없음")
+                            st.caption("🔄 변동 내역 없음")
             
             st.write("---")
-            
-            st.markdown("### 📈 조원별 기여도 개별 주식 차트 조회")
-            selected_stock_user = st.selectbox("📊 상세 변동 그래프를 확인하려는 조원을 클릭하세요", m_names)
+            st.markdown("### 📈 조원별 기여도 주식 차트")
+            selected_stock_user = st.selectbox("조원을 선택하세요", m_names)
             
             if selected_stock_user:
                 user_history = data["stocks"][selected_stock_user]
-                
                 chart_df = pd.DataFrame({
                     "거래 차수": [f"{i}차 변동" for i in range(len(user_history))],
                     "기여도 가치 (P)": user_history
-                })
-                chart_df = chart_df.set_index("거래 차수")
+                }).set_index("거래 차수")
                 st.line_chart(chart_df)
-                
-                st.markdown(f"📋 **{selected_stock_user}** 조원의 전체 변동 이력 로그")
-                if not data["stock_logs"][selected_stock_user]:
-                    st.caption("표시할 상세 기록이 없습니다.")
-                else:
-                    for l_idx, log in enumerate(reversed(data["stock_logs"][selected_stock_user])):
-                        sign = "🟢 승인 (+)" if log["type"] == "plus" else "🔴 미이행 (-)"
-                        st.write(f"{l_idx+1}. [{sign}] {log['reason']} ➔ **{log['val']:,} P 변동**")
 
-    # 📅 탭 4: 달력 일정 관리 (AttributeError 원천 차단 마이그레이션 적용 및 초슬림 정렬 완비)
+    # 📅 탭 4: 달력 일정 관리 (글씨 전면 제거 버전)
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         start, end = data["start_date"], data["end_date"]
@@ -427,98 +415,80 @@ else:
             if not event_input.strip():
                 st.error("할 일 명칭을 입력해 주세요.")
             else:
-                # [🔥 핵심 픽스]: 기존 DB가 딕셔너리 구조로 남아있거나 없으면 리스트로 초기화 및 하이브리드 변환
                 if selected_date_str not in data["calendar_events"] or isinstance(data["calendar_events"][selected_date_str], dict):
                     data["calendar_events"][selected_date_str] = []
                 
                 data["calendar_events"][selected_date_str].append({
                     "id": len(data["calendar_events"][selected_date_str]),
                     "content": event_input.strip(),
-                    "status": "⏳ 대기",
+                    "status": "⏳",
                     "worker": worker_input
                 })
                 save_data(data)
-                st.success(f"🎉 {selected_date_str}에 {worker_input}님의 [{event_input}] 업무가 정상 누적 추가되었습니다!")
+                st.success("업무가 리스트에 추가되었습니다!")
                 st.rerun()
             
         st.write("---")
-        st.markdown("#### 📋 조장 전용 최종 업무 승인 결재 리스트")
+        st.markdown("#### 📋 최종 업무 결재 리스트 (하루 다중 노출 지원)")
         
         for d_str in date_strs:
             raw_ev = data["calendar_events"].get(d_str, [])
             
-            # [🔥 핵심 픽스]: 과거 단일 데이터용 딕셔너리로 오염되어 있으면 실시간으로 리스트 패키징 처리
             if isinstance(raw_ev, dict):
                 if raw_ev.get("content") and raw_ev["content"] != "등록된 일이 없습니다.":
-                    day_events = [{
-                        "id": 0,
-                        "content": raw_ev["content"],
-                        "status": raw_ev.get("status", "⏳ 대기"),
-                        "worker": raw_ev.get("worker", m_names[0] if m_names else "없음")
-                    }]
+                    day_events = [{"id": 0, "content": raw_ev["content"], "status": raw_ev.get("status", "⏳"), "worker": raw_ev.get("worker", m_names[0] if m_names else "없음")}]
                 else:
                     day_events = []
             else:
                 day_events = raw_ev
             
             if not day_events:
-                c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4.5, 1.5, 0.5, 0.5])
+                c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 5.0, 1.0, 0.5, 0.5])
                 with c_d: st.write(d_str)
                 with c_w: st.write("👤 없음")
                 with c_c: st.write("등록된 일이 없습니다.")
-                with c_s: st.markdown("<span style='color:gray;'>-</span>", unsafe_allow_html=True)
+                with c_s: st.write("-")
                 with c_b1: st.write("")
                 with c_b2: st.write("")
             else:
                 for ev in day_events:
-                    # [🎯 UI 개선]: 비율을 [1.5, 1.5, 4.5, 1.5, 0.5, 0.5]로 조정하여 무조건 한 줄로 완벽 가로 정렬 고정
-                    c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4.5, 1.5, 0.5, 0.5])
+                    # [🎯 핵심 변경]: 한글 설명 문구를 전면 빼버리고 오직 기호만 표기하여 줄바꿈 완전 방지
+                    c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 5.0, 1.0, 0.5, 0.5])
                     
                     with c_d: st.write(d_str)
-                    with c_w: st.write(f"👤 {ev['worker']}")
+                    with c_w: St.write(f"👤 {ev['worker']}")
                     with c_c: st.write(ev["content"])
                     with c_s: 
-                        if "승인" in ev["status"]:
-                            st.markdown("<span style='color:#2ec4b6; font-weight:bold;'>✔️ 승인 완료</span>", unsafe_allow_html=True)
-                        elif "반려" in ev["status"]:
-                            st.markdown("<span style='color:#e71d36; font-weight:bold;'>❌ 미이행 반려</span>", unsafe_allow_html=True)
+                        if "✔️" in ev["status"]:
+                            st.write("✔️")
+                        elif "❌" in ev["status"]:
+                            st.write("❌")
                         else:
-                            st.markdown("<span style='color:orange;'>⏳ 결재 대기</span>", unsafe_allow_html=True)
+                            st.write("⏳")
                             
                     with c_b1:
-                        if "승인" not in ev["status"]:
-                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}", help="승인 처리 및 기여도 업"):
-                                ev["status"] = "✔️ 승인"
+                        if "✔️" not in ev["status"]:
+                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}", help="승인"):
+                                ev["status"] = "✔️"
                                 target_worker = ev["worker"]
-                                
                                 if target_worker in data["stocks"]:
                                     current_p = data["stocks"][target_worker][-1]
                                     data["stocks"][target_worker].append(current_p + 3000)
-                                    data["stock_logs"][target_worker].append({
-                                        "type": "plus",
-                                        "val": 3000,
-                                        "reason": f"{d_str} [{ev['content']}] 승인완료"
-                                    })
+                                    data["stock_logs"][target_worker].append({"type": "plus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 승인"})
                                 save_data(data)
                                 st.rerun()
                         else:
                             st.write("")
                             
                     with c_b2:
-                        if "반려" not in ev["status"]:
-                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}", help="반려 처리 및 기여도 다운"):
-                                ev["status"] = "❌ 반려"
+                        if "❌" not in ev["status"]:
+                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}", help="반려"):
+                                ev["status"] = "❌"
                                 target_worker = ev["worker"]
-                                
                                 if target_worker in data["stocks"]:
                                     current_p = data["stocks"][target_worker][-1]
-                                    next_p = max(1000, current_p - 3000)
-                                    data["stocks"][target_worker].append(next_p)
-                                    data["stock_logs"][target_worker].append({
-                                        "type": "minus",
-                                        "val": 3000,
-                                        "reason": f"{d_str} [{ev['content']}] 미이행 패널티"
-                                    })
+                                    data["stocks"][target_worker].append(max(1000, current_p - 3000))
+                                    data["stock_logs"][target_worker].append({"type": "minus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 반려"})
                                 save_data(data)
                                 st.rerun()
                         else:
@@ -526,15 +496,14 @@ else:
 
     # 👥 탭 5: 조원 정보 수정창
     with tab5:
-        st.subheader("👥 조원 명부 관리 (수정 전용 공간)")
-        
+        st.subheader("👥 조원 명부 관리")
         edit_team_name = st.text_input("조 이름 변경", value=data["team_name"])
         edit_subject = st.text_input("프로젝트 주제 변경", value=data["subject"])
         if st.button("기본 팀 정보 수정확인"):
             data["team_name"] = edit_team_name
             data["subject"] = edit_subject
             save_data(data)
-            st.success("팀 메인 정보가 성공적으로 변경되었습니다.")
+            st.success("수정되었습니다.")
             st.rerun()
             
         st.write("---")
@@ -544,7 +513,6 @@ else:
             data["members"][i]["이름"] = st.text_input(f"성명", value=data["members"][i]["이름"], key=f"fixed_n_{i}")
             data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"fixed_p_{i}")
             data["members"][i]["역할"] = st.text_input(f"담당 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
-            st.write("---")
             
         if st.button("👥 조원 명단 데이터베이스 동기화 저장"):
             for m in data["members"]:
@@ -552,31 +520,26 @@ else:
                     data["stocks"][m["이름"]] = [10000]
                     data["stock_logs"][m["이름"]] = []
             save_data(data)
-            st.success("수정된 명단이 마스터 데이터베이스에 연동되었습니다.")
+            st.success("저장되었습니다.")
             st.rerun()
 
     # 💬 탭 6: 다중 대상 DM방 탭
     with tab6:
         st.subheader("💬 다중 대상 동시 전송 DM 채널")
-        
         chat_box = st.container(height=300)
         with chat_box:
             for c in data["chats"]:
-                st.markdown(f"**[{c['sender']} ➔ 수신자: {c['receivers']}]** *{c['time']}*")
+                st.markdown(f"**[{c['sender']} ➔ {c['receivers']}]** *{c['time']}*")
                 st.info(c["msg"])
                 
         with st.form("multi_dm_form", clear_on_submit=True):
-            selected_receivers = st.multiselect("📥 메시지를 보낼 수신자 조원들을 선택하세요 (다중 체크)", m_names, default=m_names)
-            dm_msg = st.text_input("DM 메시지 내용 작성", placeholder="선택한 여러 명의 조원에게 메시지를 동시에 발송합니다.")
-            
-            if st.form_submit_button("🚀 다중 대상 DM 발송") and dm_msg.strip():
-                if not selected_receivers:
-                    st.error("메시지를 전송할 대상을 최소 1명 이상 선택하셔야 합니다.")
-                else:
-                    receiver_str = ", ".join(selected_receivers)
+            selected_receivers = st.multiselect("수신자 선택", m_names, default=m_names)
+            dm_msg = st.text_input("DM 메시지 내용 작성")
+            if st.form_submit_button("🚀 DM 발송") and dm_msg.strip():
+                if selected_receivers:
                     data["chats"].append({
                         "sender": f"{leader_name}(조장)",
-                        "receivers": receiver_str,
+                        "receivers": ", ".join(selected_receivers),
                         "msg": dm_msg,
                         "time": datetime.now().strftime("%H:%M")
                     })
