@@ -4,12 +4,10 @@ import os
 import pickle
 from datetime import datetime, timedelta
 
-# 페이지 기본 설정
 st.set_page_config(page_title="스타트리 (Startree)", page_icon="🌳", layout="wide")
 
-DB_FILE = "startree_data.pkl"
+DB_FILE = "startree_data_v2.pkl"
 
-# 데이터 로드 및 저장 함수 (데이터 유지 기능)
 def load_data():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "rb") as f:
@@ -20,7 +18,6 @@ def save_data(data):
     with open(DB_FILE, "wb") as f:
         pickle.dump(data, f)
 
-# 세션 상태 초기화
 if "app_data" not in st.session_state:
     saved = load_data()
     if saved:
@@ -35,54 +32,45 @@ if "app_data" not in st.session_state:
             "subject": "",
             "start_date": datetime.today().date(),
             "end_date": datetime.today().date() + timedelta(days=7),
-            "calendar_events": {},  # {str(date): {"content": "", "status": "❌"}}
+            "calendar_events": {}, 
             "notices": [],
-            "chats": []
+            "chats": [],
+            "stories": [],  # [새로운 기능] 인스타 감성 스토리 저장소
+            "stocks": {}    # [새로운 기능] 기여도 주식 가격 데이터
         }
 
 data = st.session_state.app_data
 
-# [6단계] 앱 초기화 기능 (화면 구석이나 하단에 배치 가능하도록 함수화)
-def reset_app():
-    if st.sidebar.button("⚠️ 앱 전체 초기화", help="모든 데이터를 지우고 1단계부터 다시 시작합니다."):
+with st.sidebar:
+    st.title("🌳 스타트리 설정")
+    if st.button("⚠️ 앱 전체 초기화", help="모든 데이터를 지우고 처음부터 시작합니다."):
         if os.path.exists(DB_FILE):
             os.remove(DB_FILE)
         st.session_state.app_data = {
             "step": 1, "member_count": 1, "members": [], "leader_idx": 0,
             "team_name": "조", "subject": "", "start_date": datetime.today().date(),
             "end_date": datetime.today().date() + timedelta(days=7),
-            "calendar_events": {}, "notices": [], "chats": []
+            "calendar_events": {}, "notices": [], "chats": [], "stories": [], "stocks": {}
         }
         st.rerun()
 
-# 사이드바에 초기화 버튼 배치
-with st.sidebar:
-    st.title("🌳 스타트리")
-    reset_app()
-
-# ==========================================
-# ⚙️ 초기 설정 프로세스 (Step 1 ~ 5)
-# ==========================================
+# 초기 설정 1단계부터 5단계
 if data["step"] < 6:
     st.title("🚀 스타트리 초기 설정")
     
-    # 1단계: 인원수 입력
     if data["step"] == 1:
         st.subheader("1단계: 팀의 총 인원수를 입력해주세요.")
         count = st.number_input("인원 수 (명)", min_value=1, max_value=20, value=data["member_count"])
         if st.button("다음 단계로"):
             data["member_count"] = count
-            # 인원수에 맞게 멤버 리스트 구조 미리 생성
             if len(data["members"]) != count:
                 data["members"] = [{"이름": "", "연락처": "", "역할": ""} for _ in range(count)]
             data["step"] = 2
             save_data(data)
             st.rerun()
 
-    # 2단계: 조원 정보 입력 및 조장 선택
     elif data["step"] == 2:
         st.subheader("2단계: 조원들의 정보를 입력하고 조장을 선택해주세요.")
-        
         member_names = []
         for i in range(data["member_count"]):
             st.markdown(f"#### 👤 조원 {i+1}")
@@ -90,13 +78,12 @@ if data["step"] < 6:
             with col1:
                 data["members"][i]["이름"] = st.text_input(f"이름", value=data["members"][i]["이름"], key=f"name_{i}")
             with col2:
-                data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"phone_{i}", placeholder="010-XXXX-XXXX")
+                data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"phone_{i}")
             with col3:
-                data["members"][i]["역할"] = st.text_input(f"역할", value=data["members"][i]["역할"], key=f"role_{i}", placeholder="예: PPT 제작, 발표")
+                data["members"][i]["역할"] = st.text_input(f"역할", value=data["members"][i]["역할"], key=f"role_{i}")
             member_names.append(data["members"][i]["이름"] if data["members"][i]["이름"] else f"조원 {i+1}")
         
         st.markdown("---")
-        # 조장 선택 기능
         data["leader_idx"] = st.selectbox("👑 이 조의 조장은 누구인가요?", range(data["member_count"]), format_func=lambda x: member_names[x])
         
         col_btn1, col_btn2 = st.columns(2)
@@ -110,7 +97,6 @@ if data["step"] < 6:
                 save_data(data)
                 st.rerun()
 
-    # 3단계: 조 이름 입력 (Skip 가능)
     elif data["step"] == 3:
         st.subheader("3단계: 조 이름을 정해주세요.")
         t_name = st.text_input("조 이름 입력", placeholder="미입력 시 '조'로 설정됩니다.")
@@ -133,10 +119,9 @@ if data["step"] < 6:
                 save_data(data)
                 st.rerun()
 
-    # 4단계: 주제 입력
     elif data["step"] == 4:
         st.subheader("4단계: 어떤 조 활동을 할 것인지 주제를 적어주세요.")
-        subj = st.text_input("프로젝트 주제/내용", value=data["subject"], placeholder="예: 창업동아리 앱 프로토타입 개발")
+        subj = st.text_input("프로젝트 주제/내용", value=data["subject"])
         
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
@@ -150,10 +135,8 @@ if data["step"] < 6:
                 save_data(data)
                 st.rerun()
 
-    # 5단계: 마감 기한 입력
     elif data["step"] == 5:
         st.subheader("5단계: 조 활동의 마감 기한을 선택해주세요.")
-        st.info(f"시작일은 오늘({data['start_date']})로 자동 설정되며, 마감일까지의 달력이 생성됩니다.")
         e_date = st.date_input("마감 날짜 선택", value=data["end_date"], min_value=data["start_date"])
         
         col_btn1, col_btn2 = st.columns(2)
@@ -164,35 +147,65 @@ if data["step"] < 6:
         with col_btn2:
             if st.button("🎉 설정 완료 및 홈화면 이동"):
                 data["end_date"] = e_date
-                data["step"] = 6  # 홈 화면 진입 코드
+                # 주식 데이터 초기화 (모두 공평하게 10,000원에서 시작)
+                for m in data["members"]:
+                    if m["이름"]:
+                        data["stocks"][m["이름"]] = [10000]
+                data["step"] = 6
                 save_data(data)
                 st.rerun()
 
-# ==========================================
-# 🏠 6, 7단계: 메인 홈 화면 및 기능 운영
-# ==========================================
+# 메인 홈 화면 운영
 else:
-    # 대시보드 상단 헤더
-    st.title(f"🌳 {data['team_name']} 실시간 워크스페이스")
-    st.markdown(f"**🎯 프로젝트 주제:** {data['subject']}")
+    m_names = [m["이름"] if m["이름"] else f"조원 {idx+1}" for idx, m in enumerate(data["members"])]
+    leader_name = data["members"][data["leader_idx"]]["이름"]
     
-    # 상단 탭 구성 (홈/공지방, 달력 관리, 조원 정보 수정, DM 채팅방)
-    tab1, tab2, tab3, tab4 = st.tabs(["📢 홈 & 공지사항", "📅 달력 일정 관리", "👥 조원 정보 관리", "💬 DM 채팅방"])
+    # 상단 대시보드 타이틀
+    st.title(f"🌳 {data['team_name']} 워크스페이스")
+    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 조장:** {leader_name}")
     
-    # ----------------------------------------
-    # 탭 1: 홈 & 공지사항 (글 작성 및 파일 업로드)
-    # ----------------------------------------
+    # [아이디어 2번 적용] 인스타 스타일 스토리 바 상단 배치
+    st.write("---")
+    st.markdown("### 📸 조원들의 실시간 스토리 인증")
+    if data["stories"]:
+        story_cols = st.columns(max(len(data["stories"]), 5))
+        for s_idx, s in enumerate(data["stories"]):
+            with story_cols[s_idx % 5]:
+                st.markdown(f"🔴 **{s['user']}**")
+                st.caption(f"⏱️ {s['time']}")
+                st.text_area(label=f"스토리_{s_idx}", value=s["content"], height=70, disabled=True, label_visibility="collapsed")
+    else:
+        st.caption("아직 올라온 스토리가 없습니다. 아래 홈 탭에서 오늘 한 일을 사진 대신 글로 인증해 보세요!")
+    st.write("---")
+
+    # 메인 탭 분리
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📢 홈 및 스토리 업로드", "📊 팀플 기여도 주식 차트", "📅 달력 일정 관리", "👥 조원 정보 관리", "💬 DM 채팅방"])
+    
+    # 탭 1: 홈 및 공지, 스토리 작성
     with tab1:
-        st.subheader("📌 팀 공지사항 게시판")
-        
-        # 글 작성 및 파일 업로드
-        with st.form("notice_form", clear_on_submit=True):
-            notice_text = st.text_area("공지글 또는 전달사항을 적어주세요.")
-            uploaded_file = st.file_uploader("파일 첨부 (선택사항)", type=["pdf", "png", "jpg", "zip", "hwp", "xlsx", "pptx"])
-            submit_notice = st.form_submit_button("공지 올리기")
-            
-            if submit_notice:
-                if notice_text.strip():
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.subheader("📸 새 스토리 올리기 (인스타 감성 업무 인증)")
+            with st.form("story_form", clear_on_submit=True):
+                s_user = st.selectbox("작성자 선택", m_names, key="story_u")
+                s_text = st.text_input("지금 어떤 팀플 업무 중인가요? (예: 카페에서 카페인 수집하며 PPT 3페이지 장인 정신으로 제작 중)")
+                submit_s = st.form_submit_button("스토리 게시")
+                if submit_s and s_text.strip():
+                    data["stories"].insert(0, {
+                        "user": s_user,
+                        "content": s_text,
+                        "time": datetime.now().strftime("%H:%M")
+                    })
+                    save_data(data)
+                    st.rerun()
+                    
+        with col_right:
+            st.subheader("📌 팀 공지사항 게시판")
+            with st.form("notice_form", clear_on_submit=True):
+                notice_text = st.text_area("공지글 내용을 입력하세요.")
+                uploaded_file = st.file_uploader("파일 첨부 (선택사항)")
+                submit_notice = st.form_submit_button("공지 등록")
+                if submit_notice and notice_text.strip():
                     file_info = uploaded_file.name if uploaded_file else "첨부 파일 없음"
                     data["notices"].insert(0, {
                         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -204,166 +217,156 @@ else:
                     st.rerun()
         
         st.write("---")
-        # 공지 출력
-        if data["notices"]:
-            for n in data["notices"]:
-                st.info(f"**📅 {n['date']}**\n\n{n['content']}\n\n📎 *파일: {n['file']}*")
-        else:
-            st.text("등록된 공지사항이 없습니다.")
+        st.markdown("#### 📋 등록된 공지 목록")
+        for n in data["notices"]:
+            st.info(f"📅 {n['date']}\n\n{n['content']}\n\n📎 파일: {n['file']}")
 
-    # ----------------------------------------
-    # 탭 2: 달력 일정 관리 (처음 실행일 ~ 끝나는 날 달력 구현)
-    # ----------------------------------------
+    # [아이디어 1번 적용] 탭 2: 팀플 기여도 주식 차트
     with tab2:
+        st.subheader("📈 실시간 팀플 기여도 주식 차트")
+        st.caption("조장님이 달력에서 완료 승인을 해줄 때마다 주가가 상한가를 칩니다! 잠수 시 하한가 폭락 주의.")
+        
+        # 가상의 타임라인 차트 데이터 구성
+        stock_df = pd.DataFrame(dict([ (k, pd.Series(v)) for k, v in data["stocks"].items() ]))
+        st.line_chart(stock_df)
+        
+        # 현재 주가 순위 표시
+        st.markdown("#### 💰 조원별 현재 기여도 주가 현황")
+        rank_cols = st.columns(len(data["stocks"]))
+        for r_idx, (name, prices) in enumerate(data["stocks"].items()):
+            with rank_cols[r_idx]:
+                current_price = prices[-1]
+                prev_price = prices[-2] if len(prices) > 1 else 10000
+                diff = current_price - prev_price
+                st.metric(label=f"{name} 주가", value=f"{current_price:,} 원", delta=f"{diff:,} 원")
+
+    # 탭 3: 달력 일정 관리 (주가 변동 로직 결합)
+    with tab3:
         st.subheader("📅 맞춤형 대시보드 달력")
-        st.caption(f"프로젝트 기간: {data['start_date']} ~ {data['end_date']}")
         
-        # 날짜 범위 생성
-        start = data["start_date"]
-        end = data["end_date"]
-        delta = end - start
-        
-        date_list = [start + timedelta(days=i) for i in range(delta.days + 1)]
+        start, end = data["start_date"], data["end_date"]
+        date_list = [start + timedelta(days=i) for i in range((end - start).days + 1)]
         date_strs = [str(d) for d in date_list]
         
-        # 날짜 선택기
-        selected_date_str = st.selectbox("🗓️ 조회하거나 할 일을 입력할 날짜를 선택하세요", date_strs)
+        selected_date_str = st.selectbox("🗓️ 조회하거나 할 일을 입력할 날짜 선택", date_strs)
         
-        # 선택한 날짜의 할 일 입력 및 보기
-        current_event = data["calendar_events"].get(selected_date_str, {"content": "", "status": "❌"})
+        # 각 날짜별로 담당자 지정을 위해 구조 업그레이드
+        current_event = data["calendar_events"].get(selected_date_str, {"content": "등록된 일이 없습니다.", "status": "❌", "worker": m_names[0]})
         
-        event_input = st.text_input(f"[{selected_date_str}] 이날 해야 할 일 입력/수정", value=current_event["content"])
-        if st.button("일정 저장"):
-            if selected_date_str not in data["calendar_events"]:
-                data["calendar_events"][selected_date_str] = {"content": "", "status": "❌"}
-            data["calendar_events"][selected_date_str]["content"] = event_input
+        col_ev1, col_ev2 = st.columns(2)
+        with col_ev1:
+            event_input = st.text_input(f"[{selected_date_str}] 할 일 입력", value=current_event["content"])
+        with col_ev2:
+            worker_input = st.selectbox(f"[{selected_date_str}] 담당 조원 지정", m_names, index=m_names.index(current_event.get("worker", m_names[0])))
+            
+        if st.button("일정 및 담당자 저장"):
+            data["calendar_events"][selected_date_str] = {
+                "content": event_input,
+                "status": current_event["status"],
+                "worker": worker_input
+            }
             save_data(data)
-            st.success("일정이 반영되었습니다.")
+            st.success("달력 일정이 저장되었습니다.")
             st.rerun()
             
         st.write("---")
-        st.markdown("### 📋 전체 날짜별 할 일 목록")
+        st.markdown("### 📋 전체 날짜별 진행 및 조장 최종 결재 현황")
         
-        # 조장 이름 가져오기
-        leader_name = data["members"][data["leader_idx"]]["이름"] if data["members"] else "미정"
-        st.write(f"👑 **조장 권한 ({leader_name}):** 조장님만 완료(✔️) 및 미완료(❌) 체크박스를 변경할 수 있습니다.")
-        
-        # 표 형태로 달력 일정 및 조장 확인란 구현
         for d_str in date_strs:
-            ev = data["calendar_events"].get(d_str, {"content": "등록된 할 일이 없습니다.", "status": "❌"})
-            col_d, col_c, col_s = st.columns([2, 5, 2])
+            ev = data["calendar_events"].get(d_str, {"content": "등록된 일이 없습니다.", "status": "❌", "worker": "없음"})
+            c_d, c_w, c_c, c_s = st.columns([2, 2, 4, 2])
             
-            with col_d:
-                st.write(f"**{d_str}**")
-            with col_c:
+            with c_d:
+                st.write(d_str)
+            with c_w:
+                st.write(f"👤 {ev['worker']}")
+            with c_c:
                 st.write(ev["content"])
-            with col_s:
-                # 조장 체크 기능 (조장 전용 UI 시뮬레이션)
-                is_completed = (ev["status"] == "✔️")
-                # 토글 버튼처럼 구현
-                btn_label = f"상태: {ev['status']} (변경)"
-                if st.button(btn_label, key=f"status_btn_{d_str}"):
-                    if ev["content"] != "등록된 할 일이 없습니다.":
-                        data["calendar_events"][d_str]["status"] = "❌" if is_completed else "✔️"
+            with c_s:
+                is_done = (ev["status"] == "✔️")
+                if st.button(f"결재: {ev['status']}", key=f"cal_btn_{d_str}"):
+                    if ev["content"] != "등록된 일이 없습니다." and ev["worker"] in data["stocks"]:
+                        # 상태 변경
+                        new_status = "❌" if is_done else "✔️"
+                        data["calendar_events"][d_str]["status"] = new_status
+                        
+                        # [주가 반영] 완료 승인 시 주가 +3,000원 / 취소 시 -3,000원 폭락
+                        current_p = data["stocks"][ev["worker"]][-1]
+                        if new_status == "✔️":
+                            data["stocks"][ev["worker"]].append(current_p + 3000)
+                        else:
+                            data["stocks"][ev["worker"]].append(max(1000, current_p - 3000))
+                            
                         save_data(data)
                         st.rerun()
 
-    # ----------------------------------------
-    # 탭 3: 조원 정보 관리 (수정 및 추가 가능)
-    # ----------------------------------------
+    # 탭 4: 조원 정보 관리
     with tab3:
-        st.subheader("👥 팀원 명부 및 수정")
-        
-        # 조 이름 및 주제 실시간 수정
-        st.markdown("#### ✏️ 팀 기본정보 수정")
-        edit_team_name = st.text_input("조 이름 수정", value=data["team_name"])
-        edit_subject = st.text_input("주제 수정", value=data["subject"])
-        if st.button("기본정보 업데이트"):
+        pass # Streamlit 중복 선언 방지용으로 아래 tab4 사용
+    with tab4:
+        st.subheader("👥 팀원 명부 관리")
+        edit_team_name = st.text_input("조 이름 변경", value=data["team_name"])
+        edit_subject = st.text_input("주제 변경", value=data["subject"])
+        if st.button("팀 정보 수정완료"):
             data["team_name"] = edit_team_name
             data["subject"] = edit_subject
             save_data(data)
-            st.success("기본정보가 수정되었습니다.")
+            st.success("팀 기본 정보가 변경되었습니다.")
             st.rerun()
             
         st.write("---")
-        st.markdown("#### ✏️ 조원 세부정보 수정")
         for i in range(len(data["members"])):
-            is_leader = " (👑 조장)" if i == data["leader_idx"] else ""
-            st.markdown(f"**조원 {i+1}{is_leader}**")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                data["members"][i]["이름"] = st.text_input(f"이름", value=data["members"][i]["이름"], key=f"edit_name_{i}")
-            with col2:
-                data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"edit_phone_{i}")
-            with col3:
-                data["members"][i]["역할"] = st.text_input(f"역할", value=data["members"][i]["역할"], key=f"edit_role_{i}")
-        
-        # 조장 재선택
-        m_names = [m["이름"] if m["이름"] else f"조원 {idx+1}" for idx, m in enumerate(data["members"])]
-        data["leader_idx"] = st.selectbox("조장 변경", range(len(data["members"])), index=data["leader_idx"], format_func=lambda x: m_names[x])
-        
-        if st.button("조원 정보 저장"):
-            save_data(data)
-            st.success("조원 정보가 안전하게 수정되었습니다.")
-            st.rerun()
-            
-        st.write("---")
-        # 신규 조원 중간 추가 기능
-        st.markdown("#### ➕ 새로운 조원 추가")
-        add_col1, add_col2, add_col3 = st.columns(3)
-        with add_col1:
-            add_name = st.text_input("새 조원 이름", key="add_n")
-        with add_col2:
-            add_phone = st.text_input("새 조원 연락처", key="add_p")
-        with add_col3:
-            add_role = st.text_input("새 조원 역할", key="add_r")
-            
-        if st.button("이 팀원에 추가하기"):
-            if add_name.strip():
-                data["members"].append({"이름": add_name, "연락처": add_phone, "역할": add_role})
-                data["member_count"] = len(data["members"])
-                save_data(data)
-                st.success(f"{add_name} 조원이 추가되었습니다.")
-                st.rerun()
-
-    # ----------------------------------------
-    # 탭 4: DM 채팅방 (인스타 DM 스타일 UI + 상단 전화 버튼)
-    # ----------------------------------------
-    with tab4:
-        st.subheader("💬 인스타 DM 스타일 팀 대화방")
-        
-        # 상단바 영역 (채팅방 이름 + 인스타 스타일 전화기 아이콘)
-        chat_header_col1, chat_header_col2 = st.columns([8, 2])
-        with chat_header_col1:
-            st.markdown(f"### 📱 {data['team_name']} 단체 DM")
-        with chat_header_col2:
-            # 상단 전화 버튼 배치 (클릭 시 알림 전송 가상 모달)
-            if st.button("📞 전화 걸기", help="조원들에게 그룹 보이스콜 전화를 거는 기능 버튼입니다."):
-                st.toast("📞 실시간 전화 연결을 시도 중입니다... (가상 기능)", icon="🎵")
-        
-        st.write("---")
-        
-        # 채팅 내역 보여주기 박스 형태
-        chat_container = st.container(height=300)
-        with chat_container:
-            if data["chats"]:
-                for c in data["chats"]:
-                    # 말풍선 스타일 가상 구현
-                    st.markdown(f"**[{c['sender']}]** *({c['time']})*")
-                    st.info(c["msg"])
-            else:
-                st.caption("아직 주고받은 메시지가 없습니다. 첫 인사를 건네보세요!")
+            is_l = " (👑 조장)" if i == data["leader_idx"] else ""
+            st.markdown(f"**조원 {i+1}{is_l}**")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                data["members"][i]["이름"] = st.text_input(f"이름", value=data["members"][i]["이름"], key=f"ed_n_{i}")
+            with c2:
+                data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"ed_p_{i}")
+            with c3:
+                data["members"][i]["역할"] = st.text_input(f"역할", value=data["members"][i]["역할"], key=f"ed_r_{i}")
                 
-        # 메시지 전송 폼
-        with st.form("chat_send_form", clear_on_submit=True):
-            chat_sender = st.selectbox("보내는 사람 선택", m_names)
-            chat_msg = st.text_input("메시지 보내기...", placeholder="메시지를 입력하세요.")
-            send_btn = st.form_submit_button("전송")
+        if st.button("조원 정보 최종 저장"):
+            save_data(data)
+            st.success("정보가 업데이트되었습니다.")
+            st.rerun()
+
+    # [아이디어 3번 적용] 탭 5: DM 채팅방 및 상단 전화 기능 (마감 임박 긴급 경보 기능 포함)
+    with tab5:
+        # 마감 임박한 일정이 있는지 검사 (예: 오늘 날짜 일정이 미완료(❌) 상태인지 체크)
+        today_str = str(datetime.today().date())
+        today_event = data["calendar_events"].get(today_str, {"status": "❌", "content": "등록된 일이 없습니다."})
+        
+        is_emergency = today_event["content"] != "등록된 일이 없습니다." and today_event["status"] == "❌"
+        
+        # 만약 마감 안 지켜졌으면 빨간 경고창(사이렌 대피소 모드) 활성화
+        if is_emergency:
+            st.error(f"🚨 긴급 경보: 오늘 마감인 과제 [{today_event['content']}]가 아직 완료되지 않았습니다! 디엠방에 비상이 걸렸습니다.")
             
-            if send_btn and chat_msg.strip():
+        chat_h1, chat_h2 = st.columns([8, 2])
+        with chat_h1:
+            st.markdown(f"### 📱 {data['team_name']} 단체 DM 대화방")
+        with chat_h2:
+            if st.button("📞 실시간 보이스콜 연결", help="인스타 스타일 상단 전화 버튼"):
+                st.toast("🎵 조원들에게 실시간 그룹 통화를 연결하고 있습니다... (가상 기능)", icon="📞")
+                
+        st.write("---")
+        
+        # 채팅 로그 출력 (긴급 상황일 땐 배경 색상 체감을 위해 테두리 추가)
+        chat_box = st.container(height=250)
+        with chat_box:
+            for c in data["chats"]:
+                st.markdown(f"**[{c['sender']}]** *{c['time']}*")
+                st.info(c["msg"])
+                
+        with st.form("chat_form", clear_on_submit=True):
+            c_sender = st.selectbox("메시지 보낼 사람", m_names, key="chat_s")
+            c_msg = st.text_input("메시지 입력 창...", placeholder="조원들과 대화를 나눠보세요.")
+            submit_c = st.form_submit_button("전송")
+            if submit_c and c_msg.strip():
                 data["chats"].append({
-                    "sender": chat_sender,
-                    "msg": chat_msg,
+                    "sender": c_sender,
+                    "msg": c_msg,
                     "time": datetime.now().strftime("%H:%M")
                 })
                 save_data(data)
