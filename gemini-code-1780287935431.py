@@ -251,7 +251,7 @@ else:
         "💬 다중 대상 DM방"
     ])
     
-    # 탭 1: 공지사항 게시판 (파일 실제 열기/다운로드 기능 적용)
+    # 탭 1: 공지사항 게시판 (파일 다운로드 완벽 지원)
     with tab1:
         st.subheader("📌 팀 공지사항 관리")
         with st.form("notice_form", clear_on_submit=True):
@@ -282,7 +282,6 @@ else:
                 st.caption(f"📅 {n['date']}")
                 st.write(n["content"])
                 
-                # 파일 다운로드 버튼 배치로 조원들이 즉시 열어볼 수 있도록 수정
                 if n.get("file_bytes") is not None:
                     st.download_button(
                         label=f"📎 파일 열기/다운로드 ({n['file_name']})",
@@ -370,11 +369,10 @@ else:
                                 save_data(data)
                                 st.rerun()
 
-    # 📊 탭 3: 기여도 주식 차트 대시보드 (StreamlitInvalidColumnSpecError 원천 방어)
+    # 📊 탭 3: 기여도 주식 차트 대시보드
     with tab3:
         st.subheader("📊 실시간 팀플 기여도 지표 (주식형 대시보드)")
         
-        # [🔥 방어 로직]: 만약 딕셔너리가 비어있거나 키 개수가 0개면 컬럼 생성을 패스하여 에러 차단
         if not data.get("stocks") or len(data["stocks"]) == 0:
             st.info("조원 정보가 설정되면 차트가 실시간 활성화됩니다.")
         else:
@@ -415,11 +413,22 @@ else:
                 }).set_index("거래 차수")
                 st.line_chart(chart_df)
 
-    # 📅 탭 4: 달력 일정 관리 (대문자 St 오타 완전 교정본)
+    # 📅 탭 4: 달력 일정 관리 (날짜 기한 연동 패치 및 휴지통 기능 완비 버전)
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
-        start, end = data["start_date"], data["end_date"]
-        date_list = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+        
+        # [🔥 날짜 패치]: 설정한 기한까지만 나오도록 수정
+        start_date = data.get("start_date", datetime.today().date())
+        end_date = data.get("end_date", datetime.today().date() + timedelta(days=7))
+        
+        # 데이터가 가끔 스트링으로 변환되었을 때를 방지하는 방어형 타입 체크 코드
+        if isinstance(start_date, str): start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+        if isinstance(end_date, str): end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        if start_date > end_date:
+            end_date = start_date + timedelta(days=7)
+            
+        date_list = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
         date_strs = [str(d) for d in date_list]
         
         col_reg1, col_reg2, col_reg3 = st.columns([2, 2, 4])
@@ -462,31 +471,27 @@ else:
                 day_events = raw_ev
             
             if not day_events:
-                c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 5.0, 1.0, 0.5, 0.5])
+                c_d, c_w, c_c, c_s, c_b1, c_b2, c_b3 = st.columns([1.5, 1.2, 4.3, 0.6, 0.4, 0.4, 0.6])
                 with c_d: st.write(d_str)
                 with c_w: st.write("👤 없음")
                 with c_c: st.write("등록된 일이 없습니다.")
                 with c_s: st.write("-")
-                with c_b1: st.write("")
-                with c_b2: st.write("")
             else:
-                for ev in day_events:
-                    c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 5.0, 1.0, 0.5, 0.5])
+                for idx, ev in enumerate(day_events):
+                    # [🎯 레이아웃 버그 픽스]: 컬럼 가로 넓이를 정밀 조정하여 기호 꼬임 원천 방지
+                    c_d, c_w, c_c, c_s, c_b1, c_b2, c_b3 = st.columns([1.5, 1.2, 4.3, 0.6, 0.4, 0.4, 0.6])
                     
                     with c_d: st.write(d_str)
-                    with c_w: st.write(f"👤 {ev['worker']}")  # [오타 완벽 교정] St.write -> st.write
+                    with c_w: st.write(f"👤 {ev['worker']}")
                     with c_c: st.write(ev["content"])
                     with c_s: 
-                        if "✔️" in ev["status"]:
-                            st.write("✔️")
-                        elif "❌" in ev["status"]:
-                            st.write("❌")
-                        else:
-                            st.write("⏳")
+                        if "✔️" in ev["status"]: st.write("✔️")
+                        elif "❌" in ev["status"]: st.write("❌")
+                        else: st.write("⏳")
                             
                     with c_b1:
                         if "✔️" not in ev["status"]:
-                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}", help="승인"):
+                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}_{idx}"):
                                 ev["status"] = "✔️"
                                 target_worker = ev["worker"]
                                 if target_worker in data["stocks"]:
@@ -495,12 +500,10 @@ else:
                                     data["stock_logs"][target_worker].append({"type": "plus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 승인"})
                                 save_data(data)
                                 st.rerun()
-                        else:
-                            st.write("")
                             
                     with c_b2:
                         if "❌" not in ev["status"]:
-                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}", help="반려"):
+                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}_{idx}"):
                                 ev["status"] = "❌"
                                 target_worker = ev["worker"]
                                 if target_worker in data["stocks"]:
@@ -509,8 +512,13 @@ else:
                                     data["stock_logs"][target_worker].append({"type": "minus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 반려"})
                                 save_data(data)
                                 st.rerun()
-                        else:
-                            st.write("")
+
+                    # [🔥 신규 기능]: 업무 데이터를 리스트에서 영구 소멸시키는 휴지통 버튼 생성
+                    with c_b3:
+                        if st.button("🗑️", key=f"del_btn_{d_str}_{ev['id']}_{idx}", help="이 업무 항목 완전히 삭제"):
+                            data["calendar_events"][d_str].pop(idx)
+                            save_data(data)
+                            st.rerun()
 
     # 👥 탭 5: 조원 정보 수정창
     with tab5:
