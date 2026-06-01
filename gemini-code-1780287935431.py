@@ -34,7 +34,6 @@ if "app_data" not in st.session_state:
             "subject": "",
             "start_date": datetime.today().date(),
             "end_date": datetime.today().date() + timedelta(days=7),
-            # 하루 여러 일정 지원을 위해 구조 변경: "날짜": [{"id": 0, "content": "발표", "worker": "카이", "status": "⏳"}]
             "calendar_events": {}, 
             "notices": [],
             "chats": [],
@@ -409,7 +408,7 @@ else:
                         sign = "🟢 승인 (+)" if log["type"] == "plus" else "🔴 미이행 (-)"
                         st.write(f"{l_idx+1}. [{sign}] {log['reason']} ➔ **{log['val']:,} P 변동**")
 
-    # 📅 탭 4: 달력 일정 관리 (하루 다중 등록 지원 및 깔끔한 기호 버튼 개편)
+    # 📅 탭 4: 달력 일정 관리 (AttributeError 원천 차단 마이그레이션 적용 및 초슬림 정렬 완비)
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         start, end = data["start_date"], data["end_date"]
@@ -428,10 +427,10 @@ else:
             if not event_input.strip():
                 st.error("할 일 명칭을 입력해 주세요.")
             else:
-                if selected_date_str not in data["calendar_events"]:
+                # [🔥 핵심 픽스]: 기존 DB가 딕셔너리 구조로 남아있거나 없으면 리스트로 초기화 및 하이브리드 변환
+                if selected_date_str not in data["calendar_events"] or isinstance(data["calendar_events"][selected_date_str], dict):
                     data["calendar_events"][selected_date_str] = []
                 
-                # 리스트 형태로 어펜드하여 중복 덮어쓰기 완전 방지
                 data["calendar_events"][selected_date_str].append({
                     "id": len(data["calendar_events"][selected_date_str]),
                     "content": event_input.strip(),
@@ -439,19 +438,31 @@ else:
                     "worker": worker_input
                 })
                 save_data(data)
-                st.success(f"🎉 {selected_date_str}에 {worker_input}님의 [{event_input}] 업무가 추가되었습니다!")
+                st.success(f"🎉 {selected_date_str}에 {worker_input}님의 [{event_input}] 업무가 정상 누적 추가되었습니다!")
                 st.rerun()
             
         st.write("---")
         st.markdown("#### 📋 조장 전용 최종 업무 승인 결재 리스트")
         
-        # 전체 날짜를 순회하며 등록된 모든 다중 일정을 출력
         for d_str in date_strs:
-            day_events = data["calendar_events"].get(d_str, [])
+            raw_ev = data["calendar_events"].get(d_str, [])
+            
+            # [🔥 핵심 픽스]: 과거 단일 데이터용 딕셔너리로 오염되어 있으면 실시간으로 리스트 패키징 처리
+            if isinstance(raw_ev, dict):
+                if raw_ev.get("content") and raw_ev["content"] != "등록된 일이 없습니다.":
+                    day_events = [{
+                        "id": 0,
+                        "content": raw_ev["content"],
+                        "status": raw_ev.get("status", "⏳ 대기"),
+                        "worker": raw_ev.get("worker", m_names[0] if m_names else "없음")
+                    }]
+                else:
+                    day_events = []
+            else:
+                day_events = raw_ev
             
             if not day_events:
-                # 등록된 업무가 아예 없는 날짜의 디폴트 가이드 라인
-                c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4, 1.5, 0.7, 0.7])
+                c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4.5, 1.5, 0.5, 0.5])
                 with c_d: st.write(d_str)
                 with c_w: st.write("👤 없음")
                 with c_c: st.write("등록된 일이 없습니다.")
@@ -459,26 +470,24 @@ else:
                 with c_b1: st.write("")
                 with c_b2: st.write("")
             else:
-                # 해당 날짜에 등록된 여러 개의 일정을 하나씩 하단에 나란히 풀어서 렌더링
                 for ev in day_events:
-                    # 완벽한 한 줄 유지를 위해 컬럼 너비 재조정 (글자 없는 아이콘 버튼 배치)
-                    c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4, 1.5, 0.7, 0.7])
+                    # [🎯 UI 개선]: 비율을 [1.5, 1.5, 4.5, 1.5, 0.5, 0.5]로 조정하여 무조건 한 줄로 완벽 가로 정렬 고정
+                    c_d, c_w, c_c, c_s, c_b1, c_b2 = st.columns([1.5, 1.5, 4.5, 1.5, 0.5, 0.5])
                     
                     with c_d: st.write(d_str)
                     with c_w: st.write(f"👤 {ev['worker']}")
                     with c_c: st.write(ev["content"])
                     with c_s: 
-                        if ev["status"] == "✔️ 승인":
+                        if "승인" in ev["status"]:
                             st.markdown("<span style='color:#2ec4b6; font-weight:bold;'>✔️ 승인 완료</span>", unsafe_allow_html=True)
-                        elif ev["status"] == "❌ 반려":
+                        elif "반려" in ev["status"]:
                             st.markdown("<span style='color:#e71d36; font-weight:bold;'>❌ 미이행 반려</span>", unsafe_allow_html=True)
                         else:
                             st.markdown("<span style='color:orange;'>⏳ 결재 대기</span>", unsafe_allow_html=True)
                             
                     with c_b1:
-                        # 글자를 제거하고 오직 체크 아이콘만 있는 가로 정렬 버튼 구현
-                        if ev["status"] != "✔️ 승인":
-                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}", help="과제 완수 승인"):
+                        if "승인" not in ev["status"]:
+                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}", help="승인 처리 및 기여도 업"):
                                 ev["status"] = "✔️ 승인"
                                 target_worker = ev["worker"]
                                 
@@ -496,9 +505,8 @@ else:
                             st.write("")
                             
                     with c_b2:
-                        # 글자를 제거하고 오직 X 아이콘만 있는 가로 정렬 버튼 구현
-                        if ev["status"] != "❌ 반려":
-                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}", help="과제 미이행 반려"):
+                        if "반려" not in ev["status"]:
+                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}", help="반려 처리 및 기여도 다운"):
                                 ev["status"] = "❌ 반려"
                                 target_worker = ev["worker"]
                                 
