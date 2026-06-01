@@ -157,6 +157,7 @@ elif data["step"] == "setup_1":
 elif data["step"] == "setup_2":
     st.title("🚀 스타트리 초기 설정")
     st.subheader("2단계: 조원들의 정보를 입력하고 조장을 선택해주세요.")
+    st.warning("⚠️ 팀 내에 동명이인이 있을 경우 시스템 구분을 위해 이름 뒤에 숫자나 알파벳을 붙여 구분해 주세요! (예: 홍길동1, 홍길동2)")
     
     member_names = []
     for i in range(data["member_count"]):
@@ -251,7 +252,7 @@ else:
         "💬 다중 대상 DM방"
     ])
     
-    # 탭 1: 공지사항 게시판 (파일 다운로드 완벽 지원)
+    # 탭 1: 공지사항 게시판
     with tab1:
         st.subheader("📌 팀 공지사항 관리")
         with st.form("notice_form", clear_on_submit=True):
@@ -413,21 +414,17 @@ else:
                 }).set_index("거래 차수")
                 st.line_chart(chart_df)
 
-    # 📅 탭 4: 달력 일정 관리 (날짜 기한 연동 패치 및 휴지통 기능 완비 버전)
+    # 📅 탭 4: 달력 일정 관리
     with tab4:
         st.subheader("📅 맞춤형 스케줄러 관리")
         
-        # [🔥 날짜 패치]: 설정한 기한까지만 나오도록 수정
         start_date = data.get("start_date", datetime.today().date())
-        end_date = data.get("end_date", datetime.today().date() + timedelta(days=7))
+        end_date = data.get("end_date", datetime.today().date())
         
-        # 데이터가 가끔 스트링으로 변환되었을 때를 방지하는 방어형 타입 체크 코드
         if isinstance(start_date, str): start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         if isinstance(end_date, str): end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
         
-        if start_date > end_date:
-            end_date = start_date + timedelta(days=7)
-            
+        # 칼같이 마감기한까지만 리스트 생성
         date_list = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
         date_strs = [str(d) for d in date_list]
         
@@ -457,41 +454,40 @@ else:
                 st.rerun()
             
         st.write("---")
-        st.markdown("#### 📋 최종 업무 결재 리스트 (하루 다중 노출 지원)")
+        st.markdown("#### 📋 최종 업무 결재 리스트")
         
         for d_str in date_strs:
             raw_ev = data["calendar_events"].get(d_str, [])
-            
             if isinstance(raw_ev, dict):
-                if raw_ev.get("content") and raw_ev["content"] != "등록된 일이 없습니다.":
-                    day_events = [{"id": 0, "content": raw_ev["content"], "status": raw_ev.get("status", "⏳"), "worker": raw_ev.get("worker", m_names[0] if m_names else "없음")}]
-                else:
-                    day_events = []
+                day_events = []
             else:
                 day_events = raw_ev
             
             if not day_events:
-                c_d, c_w, c_c, c_s, c_b1, c_b2, c_b3 = st.columns([1.5, 1.2, 4.3, 0.6, 0.4, 0.4, 0.6])
+                c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 0.8, 2.0])
                 with c_d: st.write(d_str)
                 with c_w: st.write("👤 없음")
                 with c_c: st.write("등록된 일이 없습니다.")
                 with c_s: st.write("-")
             else:
-                for idx, ev in enumerate(day_events):
-                    # [🎯 레이아웃 버그 픽스]: 컬럼 가로 넓이를 정밀 조정하여 기호 꼬임 원천 방지
-                    c_d, c_w, c_c, c_s, c_b1, c_b2, c_b3 = st.columns([1.5, 1.2, 4.3, 0.6, 0.4, 0.4, 0.6])
+                # 역순 조회를 통해 pop() 인덱스 꼬임 방지
+                for idx in range(len(day_events) - 1, -1, -1):
+                    ev = day_events[idx]
+                    c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 0.8, 2.0])
                     
                     with c_d: st.write(d_str)
                     with c_w: st.write(f"👤 {ev['worker']}")
                     with c_c: st.write(ev["content"])
                     with c_s: 
-                        if "✔️" in ev["status"]: st.write("✔️")
-                        elif "❌" in ev["status"]: st.write("❌")
-                        else: st.write("⏳")
+                        if "✔️" in ev["status"]: st.write("✔️ 승인")
+                        elif "❌" in ev["status"]: st.write("❌ 반려")
+                        else: st.write("⏳ 대기")
                             
-                    with c_b1:
-                        if "✔️" not in ev["status"]:
-                            if st.button("✔️", key=f"v_btn_{d_str}_{ev['id']}_{idx}"):
+                    with c_ops:
+                        # 한 줄에 정렬되도록 미니 컬럼 생성
+                        b1, b2, b3 = st.columns(3)
+                        with b1:
+                            if "✔️" not in ev["status"] and st.button("✔️", key=f"v_{d_str}_{idx}_{ev['id']}", help="승인"):
                                 ev["status"] = "✔️"
                                 target_worker = ev["worker"]
                                 if target_worker in data["stocks"]:
@@ -500,10 +496,8 @@ else:
                                     data["stock_logs"][target_worker].append({"type": "plus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 승인"})
                                 save_data(data)
                                 st.rerun()
-                            
-                    with c_b2:
-                        if "❌" not in ev["status"]:
-                            if st.button("❌", key=f"x_btn_{d_str}_{ev['id']}_{idx}"):
+                        with b2:
+                            if "❌" not in ev["status"] and st.button("❌", key=f"x_{d_str}_{idx}_{ev['id']}", help="반려"):
                                 ev["status"] = "❌"
                                 target_worker = ev["worker"]
                                 if target_worker in data["stocks"]:
@@ -512,17 +506,17 @@ else:
                                     data["stock_logs"][target_worker].append({"type": "minus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 반려"})
                                 save_data(data)
                                 st.rerun()
+                        with b3:
+                            if st.button("🗑️", key=f"del_{d_str}_{idx}_{ev['id']}", help="삭제"):
+                                data["calendar_events"][d_str].pop(idx)
+                                save_data(data)
+                                st.rerun()
 
-                    # [🔥 신규 기능]: 업무 데이터를 리스트에서 영구 소멸시키는 휴지통 버튼 생성
-                    with c_b3:
-                        if st.button("🗑️", key=f"del_btn_{d_str}_{ev['id']}_{idx}", help="이 업무 항목 완전히 삭제"):
-                            data["calendar_events"][d_str].pop(idx)
-                            save_data(data)
-                            st.rerun()
-
-    # 👥 탭 5: 조원 정보 수정창
+    # 👥 탭 5: 조원 정보 수정창 (★이름 수정 시 기존 포인트 이전 및 이전 아이디 삭제 로직 적용 완료★)
     with tab5:
         st.subheader("👥 조원 명부 관리")
+        st.caption("⚠️ 동명이인이 존재할 시 '이름A', '이름B' 처럼 명확히 구분하여 적어주셔야 지표가 꼬이지 않습니다.")
+        
         edit_team_name = st.text_input("조 이름 변경", value=data["team_name"])
         edit_subject = st.text_input("프로젝트 주제 변경", value=data["subject"])
         if st.button("기본 팀 정보 수정확인"):
@@ -533,20 +527,36 @@ else:
             st.rerun()
             
         st.write("---")
+        
+        # 백업용 주식 명단 확보
+        updated_members = []
+        
         for i in range(len(data["members"])):
             is_leader_mark = " (👑 조장)" if i == data["leader_idx"] else ""
             st.markdown(f"#### 👤 조원 {i+1}{is_leader_mark} 정보 관리")
-            data["members"][i]["이름"] = st.text_input(f"성명", value=data["members"][i]["이름"], key=f"fixed_n_{i}")
-            data["members"][i]["연락처"] = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"fixed_p_{i}")
-            data["members"][i]["역할"] = st.text_input(f"담당 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
             
+            old_name = data["members"][i]["이름"]
+            new_name = st.text_input(f"성명", value=old_name, key=f"fixed_n_{i}").strip()
+            fixed_p = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"fixed_p_{i}")
+            fixed_r = st.text_input(f"담당 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
+            
+            updated_members.append({"이름": new_name, "연락처": fixed_p, "역할": fixed_r})
+            
+            # [🔥 핵심 픽스]: 이름이 바뀌었을 때 구 데이터 마이그레이션 후 제거
+            if old_name and new_name and old_name != new_name:
+                if old_name in data["stocks"]:
+                    data["stocks"][new_name] = data["stocks"].pop(old_name)
+                if old_name in data["stock_logs"]:
+                    data["stock_logs"][new_name] = data["stock_logs"].pop(old_name)
+                    
         if st.button("👥 조원 명단 데이터베이스 동기화 저장"):
+            data["members"] = updated_members
             for m in data["members"]:
                 if m["이름"] and m["이름"] not in data["stocks"]:
                     data["stocks"][m["이름"]] = [10000]
                     data["stock_logs"][m["이름"]] = []
             save_data(data)
-            st.success("저장되었습니다.")
+            st.success("조원 명부와 기여도 인덱스가 깨끗하게 최신화되었습니다!")
             st.rerun()
 
     # 💬 탭 6: 다중 대상 DM방 탭
