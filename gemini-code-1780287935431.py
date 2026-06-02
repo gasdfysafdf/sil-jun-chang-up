@@ -58,7 +58,7 @@ if st.session_state.current_team_id and st.session_state.current_team_id in mast
 with st.sidebar:
     st.title("🌳 스타트리 서비스 센터")
     
-    # 🔄 2. 수동 새로고침 버튼 상단 배치
+    # 🔄 수동 새로고침 버튼
     if st.button("🔄 시스템 실시간 동기화 (새로고침)", use_container_width=True):
         st.rerun()
         
@@ -99,7 +99,7 @@ if st.session_state.step == "member_auth" and team_data:
     if not m_names:
         st.error("❌ 조장님이 아직 조원 명부를 작성하지 않았습니다. 조장에게 초기 팀 설정을 완료해달라고 요청하세요.")
     else:
-        # ✨ 1. [수정 완료] 조원 목록에서 조장(Leader) 이름은 완벽하게 필터링하여 제외
+        # 🔒 조원 목록에서 조장(Leader) 이름은 완벽하게 필터링하여 제외
         only_members_names = [name for name in m_names if name != leader_name]
         
         if not only_members_names:
@@ -216,7 +216,7 @@ elif st.session_state.step == "setup_2":
         col1, col2, col3 = st.columns(3)
         with col1: current_team["members"][i]["이름"] = st.text_input("이름(성명)", value=current_team["members"][i]["이름"], key=f"setup_n_{i}").strip()
         with col2: current_team["members"][i]["연락처"] = st.text_input("연락처(- 포함)", value=current_team["members"][i]["연락처"], key=f"setup_p_{i}")
-        with col3: current_team["members"][i]["역할(R&R)",] = st.text_input("배정 업무", value=current_team["members"][i]["역할"], key=f"setup_r_{i}")
+        with col3: current_team["members"][i]["역할"] = st.text_input("배정 업무", value=current_team["members"][i]["역할"], key=f"setup_r_{i}")
         member_names.append(current_team["members"][i]["이름"] if current_team["members"][i]["이름"] else f"조원 {i+1}")
         
     st.write("---")
@@ -307,10 +307,9 @@ else:
     with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 고유 공지사항")
         
-        # 🔄 2. 실시간 자동 새로고침 영역 지정 (st.fragment 사용)
+        # 🔄 실시간 자동 새로고침 영역 지정 (st.fragment 사용 - 5초 간격)
         @st.fragment(run_every=5)
         def show_notices_live():
-            # 백그라운드 DB 변경 사항 동시 동기화 로드
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
             
@@ -543,38 +542,50 @@ else:
                 st.success("명단 배포 완료!")
                 st.rerun()
 
-    # --- 탭 6: 다중 대상 DM방 (5초 주기 실시간 자동 렌더링) ---
+    # --- 탭 6: 다중 대상 DM방 (보안 필터링 및 5초 주기 자동 동기화 완비) ---
     with tab_mapping["💬 다중 대상 DM방"]:
         st.subheader("💬 팀 내부 전용 고속 실시간 DM 라우터")
+        st.caption("🔒 본인이 발신했거나, 수신 대상자로 지정된 프라이빗 메시지만 화면에 안전하게 표시됩니다.")
         
-        # 🔄 2. [수정 완료] 카카오톡처럼 작동하는 5초 주기 백그라운드 자동 동기화 컴포넌트
+        # 🔄 카카오톡처럼 백그라운드에서 실시간으로 나와 연관된 채팅만 로드하는 컴포넌트
         @st.fragment(run_every=5)
         def show_chats_live():
-            # 유저가 화면 전환이나 스크롤을 하지 않아도 다른 브라우저의 발송 내역을 실시간 수집
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
             
             chat_box = st.container(height=300)
             with chat_box:
                 for c in fresh_team["chats"]:
-                    st.markdown(f"**[{c['sender']} ➔ {c['receivers']}]** <small>{c['time']}</small>", unsafe_allow_html=True)
-                    st.info(c["msg"])
+                    # 수신자 문자열(예: "1, 2, 3")을 리스트로 분리 및 공백 제거
+                    receiver_list = [r.strip() for r in c['receivers'].split(",")]
+                    
+                    # 보안 조건: 내가 보낸 메시지이거나, 수신 대상에 내 이름(current_name)이 있는 경우만 노출
+                    if current_name in c['sender'] or current_name in receiver_list:
+                        st.markdown(f"**[{c['sender']} ➔ {c['receivers']}]** <small>{c['time']}</small>", unsafe_allow_html=True)
+                        st.info(c["msg"])
         
-        # 실시간 채팅 보드 출력
+        # 보안 실시간 채팅창 출력
         show_chats_live()
                 
         with st.form("multi_dm_form", clear_on_submit=True):
             all_target_names = list(m_names)
-            if leader_name not in all_target_names: all_target_names.append(leader_name)
+            if leader_name not in all_target_names: 
+                all_target_names.append(leader_name)
+                
             selected_receivers = st.multiselect("메시지 수신 대상 조원 선택", all_target_names, default=all_target_names)
-            dm_msg = st.text_input("메시지 작성", placeholder="전송 시 상대방 화면에 즉시 업데이트됩니다.")
+            dm_msg = st.text_input("메시지 작성", placeholder="전송 시 수신 대상자의 화면에만 즉시 업데이트됩니다.")
             
             if st.form_submit_button("🚀 전용 채널 메시지 발송"):
                 if dm_msg.strip():
-                    sender_display = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
-                    team_data["chats"].append({
-                        "sender": sender_display, "receivers": ", ".join(selected_receivers),
-                        "msg": dm_msg, "time": datetime.now().strftime("%H:%M")
-                    })
-                    save_all_data(master_db)
-                    st.rerun()
+                    if not selected_receivers:
+                        st.error("최소 한 명 이상의 수신 대상을 지정해야 합니다.")
+                    else:
+                        sender_display = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
+                        team_data["chats"].append({
+                            "sender": sender_display, 
+                            "receivers": ", ".join(selected_receivers),
+                            "msg": dm_msg, 
+                            "time": datetime.now().strftime("%H:%M")
+                        })
+                        save_all_data(master_db)
+                        st.rerun()
