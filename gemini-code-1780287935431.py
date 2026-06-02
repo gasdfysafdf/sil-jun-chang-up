@@ -166,14 +166,13 @@ if st.session_state.step == "member_auth" and team_data:
 # ==========================================
 elif st.session_state.step == "auth_login":
     st.title("🔐 스타트리 통합 로그인 포털")
-    
+
     login_id = st.text_input("아이디(ID)", key="login_id_input").strip()
     login_pw = st.text_input("비밀번호(PW)", type="password", key="login_pw_input").strip()
-    
+
     col_l1, col_l2 = st.columns(2)
     with col_l1:
         if st.button("로그인하기", use_container_width=True):
-            # 🔑 [A] 최고 관리자(Master Admin) 로그인 검증 (대소문자 엄격 구분)
             admin_cfg = master_db["admin_master"]
             if login_id == admin_cfg["admin_id"] and login_pw == admin_cfg["admin_pw"]:
                 st.session_state.current_user = login_id
@@ -181,14 +180,11 @@ elif st.session_state.step == "auth_login":
                 st.session_state.step = "admin_dashboard"
                 st.success("👑 최고 마스터 관리자 인증에 성공했습니다. 관제탑을 로드합니다.")
                 st.rerun()
-                
-            # 👥 [B] 일반 프로젝트 조장 로그인 검증
             elif login_id in master_db["users_master"] and master_db["users_master"][login_id]["pw"] == login_pw:
                 user_info = master_db["users_master"][login_id]
                 st.session_state.current_user = login_id
                 st.session_state.user_role = "leader"
                 st.session_state.current_team_id = user_info["team_id"]
-                
                 if st.session_state.current_team_id in master_db["teams_master"]:
                     st.session_state.step = "main_home"
                 else:
@@ -200,6 +196,64 @@ elif st.session_state.step == "auth_login":
         if st.button("새로운 팀 개설하기 (조장 가입)", use_container_width=True):
             st.session_state.step = "auth_register"
             st.rerun()
+
+    st.write("---")
+
+    # --- [ID/PW 찾기] ---
+    with st.expander("🔍 ID / 비밀번호 찾기"):
+        find_tab = st.radio("어떤 정보를 잊으셨나요?", ["아이디(ID) 찾기", "비밀번호(PW) 찾기", "ID와 비밀번호 모두 잊어버렸어요"], horizontal=True, key="find_tab_radio")
+
+        if find_tab == "아이디(ID) 찾기":
+            st.caption("비밀번호와 조 이름을 입력하면 아이디를 찾아드립니다.")
+            find_pw = st.text_input("비밀번호 입력", type="password", key="find_pw_input").strip()
+            find_team_name = st.text_input("조 이름 입력 (예: 1조, 스파크조 등)", key="find_team_name_id").strip()
+            if st.button("아이디 찾기", key="find_id_btn"):
+                if not find_pw or not find_team_name:
+                    st.warning("비밀번호와 조 이름을 모두 입력해주세요.")
+                else:
+                    found_id = None
+                    for uid, uinfo in master_db["users_master"].items():
+                        if uinfo["pw"] == find_pw:
+                            t_info = master_db["teams_master"].get(uinfo["team_id"], {})
+                            if t_info.get("team_name", "").strip() == find_team_name:
+                                found_id = uid
+                                break
+                    if found_id:
+                        st.success(f"✅ 찾으시는 아이디는 **{found_id}** 입니다.")
+                    else:
+                        st.error("❌ 입력하신 정보와 일치하는 계정을 찾을 수 없습니다.")
+
+        elif find_tab == "비밀번호(PW) 찾기":
+            st.caption("아이디와 조 이름을 입력하면 비밀번호를 찾아드립니다.")
+            find_id = st.text_input("아이디 입력", key="find_id_input").strip()
+            find_team_name2 = st.text_input("조 이름 입력 (예: 1조, 스파크조 등)", key="find_team_name_pw").strip()
+            if st.button("비밀번호 찾기", key="find_pw_btn"):
+                if not find_id or not find_team_name2:
+                    st.warning("아이디와 조 이름을 모두 입력해주세요.")
+                else:
+                    found_pw = None
+                    if find_id in master_db["users_master"]:
+                        uinfo = master_db["users_master"][find_id]
+                        t_info = master_db["teams_master"].get(uinfo["team_id"], {})
+                        if t_info.get("team_name", "").strip() == find_team_name2:
+                            found_pw = uinfo["pw"]
+                    if found_pw:
+                        st.success(f"✅ 찾으시는 비밀번호는 **{found_pw}** 입니다.")
+                    else:
+                        st.error("❌ 입력하신 정보와 일치하는 계정을 찾을 수 없습니다.")
+
+        else:
+            st.error("😢 ID와 비밀번호를 모두 분실하신 경우, 보안 정책상 시스템 내부에서 복구가 불가능합니다. 새로운 팀을 다시 생성해 주세요.")
+
+    st.write("---")
+
+    # --- [시스템 운영 안내 고정 문구] ---
+    st.markdown("""
+> **📋 시스템 운영 안내**
+> - 🔐 **보안 주의:** 개인의 ID와 비밀번호는 다른 팀원에게 절대 공유하지 마세요.
+> - ⚠️ **분실 안내:** ID와 비밀번호를 **모두** 분실하신 경우, 보안 정책상 새로운 팀을 다시 생성해야 합니다. (복구 불가)
+> - 🔍 **정보 찾기:** 둘 중 하나만 잊으셨다면 위의 **[ID / 비밀번호 찾기]** 버튼을 통해 셀프 복구를 진행하세요.
+""")
 
 # ==========================================
 # [분기 3] 조장 회원가입
