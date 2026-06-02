@@ -594,7 +594,7 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         st.subheader("📥 1:1 버그 제보 및 SOS 문의 수신함")
         
         # 2초 간격 실시간 모니터링
-        @st.fragment(run_every=2)
+        @st.fragment(run_every=3)
         def show_admin_bug_reports_live():
             fresh_db = load_all_data()
             reports = fresh_db["admin_master"].get("bug_reports", [])
@@ -815,10 +815,17 @@ else:
     is_leader = (st.session_state.user_role == "leader")
     my_chat_name = leader_name if (is_leader and leader_name != "미정") else current_name
 
-    # 🚨 [신규 기능 연동] 전사 긴급 공지 실시간 강제 상단 팝업 로드
-    if master_db["admin_master"].get("system_notices"):
-        latest_sys_notice = master_db["admin_master"]["system_notices"][0]
-        st.error(f"📢 [전사 시스템 마스터 긴급 긴급 공지 - {latest_sys_notice['time']}]\n\n{latest_sys_notice['msg']}")
+    # 🚨 [신규 기능 연동] 전사 긴급 공지 실시간 강제 상단 팝업 로드 (3초 자동새로고침)
+    @st.fragment(run_every=3)
+    def show_system_notice_banner():
+        fresh_db = load_all_data()
+        notices = fresh_db["admin_master"].get("system_notices", [])
+        if notices:
+            latest_sys_notice = notices[0]
+            st.error(f"📢 [전사 시스템 마스터 긴급 공지 - {latest_sys_notice['time']}]\n\n{latest_sys_notice['msg']}")
+        else:
+            st.empty()
+    show_system_notice_banner()
 
     st.title(f"🌳 {team_data.get('team_name', '우리팀')} 독점 워크스페이스")
     st.markdown(f"**🎯 주제:** {team_data.get('subject', '과제 주제')} | **👑 총괄조장:** {leader_name} | **👤 접속자:** {my_chat_name} ({'조장 플러그인' if is_leader else '조원 플러그인'})")
@@ -835,7 +842,7 @@ else:
     with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 고유 공지사항")
         
-        @st.fragment(run_every=2)
+        @st.fragment(run_every=3)
         def show_notices_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -899,7 +906,7 @@ else:
                     st.rerun()
                     
         with col_view:
-            @st.fragment(run_every=2)
+            @st.fragment(run_every=3)
             def show_stories_live():
                 fresh_db = load_all_data()
                 fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -945,7 +952,7 @@ else:
     with tab_mapping["📊 기여도 주식 차트"]:
         st.subheader("📊 조원 기여 가치 지분 대시보드")
         
-        @st.fragment(run_every=2)
+        @st.fragment(run_every=3)
         def show_stocks_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -1006,7 +1013,7 @@ else:
         
         st.write("---")
         
-        @st.fragment(run_every=2)
+        @st.fragment(run_every=3)
         def show_calendar_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -1185,7 +1192,7 @@ else:
                     
         st.write("---")
         
-        @st.fragment(run_every=2)
+        @st.fragment(run_every=3)
         def show_entire_chat_system_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, {"chat_rooms": [], "chats_archive": []})
@@ -1300,7 +1307,7 @@ else:
         with col_sos2:
             st.markdown("#### 📬 내 제보 건 실시간 처리 및 관리자 답변 현황")
             
-            @st.fragment(run_every=2)
+            @st.fragment(run_every=3)
             def show_my_sos_status_live():
                 fresh_db = load_all_data()
                 all_reports = fresh_db["admin_master"].get("bug_reports", [])
