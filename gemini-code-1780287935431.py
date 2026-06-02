@@ -406,10 +406,73 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
     st.markdown(f"**⚡ 현재 일시:** {datetime.now().strftime('%Y-%m-%d %H:%M')} | **🔑 관리 계정:** {st.session_state.current_user} [🚨 최고권한 마스터]")
     st.write("---")
     
-    admin_tabs = st.tabs(["👥 조장 및 팀 정보 제어실", "🚨 SOS 버그 제보 수신함", "📢 전사 긴급 공지 송출", "⚙️ 마스터 보안 및 위험구역"])
+    admin_tabs = st.tabs([
+        "📊 전체 현황 대시보드",
+        "👥 조장 및 팀 정보 제어실",
+        "🗂️ 팀 직접 편집",
+        "🚨 SOS 버그 제보 수신함",
+        "📢 전사 긴급 공지 송출",
+        "🧹 팀 데이터 관리",
+        "⚙️ 마스터 보안 및 위험구역"
+    ])
     
-    # --- 관리자 탭 1: 조장 및 팀 통합 관리 원장 ---
+    # --- 관리자 탭 0: 전체 현황 대시보드 ---
     with admin_tabs[0]:
+        st.subheader("📊 스타트리 플랫폼 전체 현황 대시보드")
+        
+        total_teams = len(master_db["users_master"])
+        total_members = sum(len(v.get("members", [])) for v in master_db["teams_master"].values())
+        total_bugs = len(master_db["admin_master"].get("bug_reports", []))
+        pending_bugs = len([r for r in master_db["admin_master"].get("bug_reports", []) if r["status"] != "✔️ 처리완료"])
+        total_notices = len(master_db["admin_master"].get("system_notices", []))
+        total_chats = sum(len(v.get("chats_archive", [])) for v in master_db["teams_master"].values())
+        total_stories = sum(len(v.get("stories", [])) for v in master_db["teams_master"].values())
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("🏢 등록 팀 수", f"{total_teams}팀")
+        c2.metric("👥 전체 조원 수", f"{total_members}명")
+        c3.metric("🚨 미처리 SOS", f"{pending_bugs}건", delta=f"전체 {total_bugs}건", delta_color="inverse")
+        c4.metric("💬 전체 채팅 수", f"{total_chats}건")
+
+        st.write("---")
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.markdown("#### 📋 팀별 활동 요약")
+            if not master_db["users_master"]:
+                st.info("등록된 팀이 없습니다.")
+            else:
+                summary_rows = []
+                for l_id, u_info in master_db["users_master"].items():
+                    t_id = u_info["team_id"]
+                    t_info = master_db["teams_master"].get(t_id, {})
+                    summary_rows.append({
+                        "조 이름": t_info.get("team_name", "설정중"),
+                        "조장 ID": l_id,
+                        "조원 수": len(t_info.get("members", [])),
+                        "공지 수": len(t_info.get("notices", [])),
+                        "스토리 수": len(t_info.get("stories", [])),
+                        "채팅 수": len(t_info.get("chats_archive", [])),
+                        "채팅방 수": len(t_info.get("chat_rooms", [])),
+                    })
+                st.dataframe(pd.DataFrame(summary_rows), use_container_width=True)
+
+        with col_right:
+            st.markdown("#### 🚨 미처리 SOS 빠른 보기")
+            pending_list = [r for r in master_db["admin_master"].get("bug_reports", []) if r["status"] != "✔️ 처리완료"]
+            if not pending_list:
+                st.success("✅ 미처리 SOS 없음 - 모든 문의가 처리되었습니다.")
+            else:
+                for rep in reversed(pending_list[-5:]):
+                    with st.container(border=True):
+                        st.markdown(f"**{rep['team_name']} · {rep['sender']}** | {rep['time']}")
+                        st.caption(rep["content"][:80] + ("..." if len(rep["content"]) > 80 else ""))
+            
+            st.write("---")
+            st.markdown(f"📢 **전사 공지 {total_notices}건** 송출 중 | ✨ **스토리 {total_stories}건** 게시됨")
+
+    # --- 관리자 탭 1: 조장 및 팀 통합 관리 원장 ---
+    with admin_tabs[1]:
         st.subheader("🗂️ 가입 팀 및 조장 계정 마스터 원장")
         st.caption("현재 플랫폼에 등록된 모든 조장의 아이디와 비밀번호 실시간 리스트입니다.")
         
@@ -445,9 +508,89 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                     save_all_data(master_db)
                     st.success(f"🎉 조장 [{target_edit_leader}]의 비밀번호가 성공적으로 변경되었습니다!")
                     st.rerun()
+
+    # --- 관리자 탭 2: 팀 직접 편집 ---
+    with admin_tabs[2]:
+        st.subheader("🗂️ 팀 정보 및 조원 명단 직접 편집")
+        st.caption("관리자가 특정 팀의 이름, 주제, 마감일, 조원 정보를 직접 수정할 수 있습니다.")
+
+        all_team_ids = list(master_db["users_master"].keys())
+        if not all_team_ids:
+            st.info("등록된 팀이 없습니다.")
+        else:
+            # 팀 선택
+            team_select_options = {}
+            for l_id, u_info in master_db["users_master"].items():
+                t_id = u_info["team_id"]
+                t_info = master_db["teams_master"].get(t_id, {})
+                label = f"{t_info.get('team_name', '설정중')} (조장: {l_id})"
+                team_select_options[label] = t_id
+
+            selected_label = st.selectbox("✏️ 편집할 팀 선택", list(team_select_options.keys()))
+            edit_team_id = team_select_options[selected_label]
+            edit_team = master_db["teams_master"].get(edit_team_id, {})
+
+            if not edit_team:
+                st.warning("해당 팀의 상세 데이터가 없습니다. (초기 설정 미완료)")
+            else:
+                st.write("---")
+                st.markdown("#### 📝 기본 팀 정보 수정")
+                with st.form("admin_edit_team_info_form"):
+                    new_team_name = st.text_input("조 이름", value=edit_team.get("team_name", ""))
+                    new_subject = st.text_input("프로젝트 주제", value=edit_team.get("subject", ""))
+                    import datetime as _dt
+                    try:
+                        default_end = _dt.date.fromisoformat(edit_team.get("end_date", str(_dt.date.today())))
+                    except Exception:
+                        default_end = _dt.date.today()
+                    new_end_date = st.date_input("마감 기한", value=default_end)
+                    if st.form_submit_button("💾 팀 기본 정보 저장"):
+                        db_w = load_all_data()
+                        db_w["teams_master"][edit_team_id]["team_name"] = new_team_name.strip() or edit_team.get("team_name", "우리팀")
+                        db_w["teams_master"][edit_team_id]["subject"] = new_subject.strip()
+                        db_w["teams_master"][edit_team_id]["end_date"] = str(new_end_date)
+                        save_all_data(db_w)
+                        st.success("✅ 팀 기본 정보가 저장되었습니다.")
+                        st.rerun()
+
+                st.write("---")
+                st.markdown("#### 👥 조원 명단 수정")
+                members = edit_team.get("members", [])
+                if not members:
+                    st.caption("등록된 조원이 없습니다.")
+                else:
+                    with st.form("admin_edit_members_form"):
+                        updated_members = []
+                        member_names_for_leader = []
+                        for i, m in enumerate(members):
+                            st.markdown(f"**조원 {i+1}**")
+                            col_m1, col_m2, col_m3 = st.columns(3)
+                            with col_m1:
+                                m_name = st.text_input("이름", value=m.get("이름", ""), key=f"adm_m_name_{edit_team_id}_{i}")
+                            with col_m2:
+                                m_contact = st.text_input("연락처", value=m.get("연락처", ""), key=f"adm_m_contact_{edit_team_id}_{i}")
+                            with col_m3:
+                                m_role = st.text_input("역할", value=m.get("역할", ""), key=f"adm_m_role_{edit_team_id}_{i}")
+                            updated_members.append({"이름": m_name, "연락처": m_contact, "역할": m_role})
+                            member_names_for_leader.append(m_name if m_name else f"조원 {i+1}")
+
+                        current_leader_idx = edit_team.get("leader_idx", 0)
+                        new_leader_idx = st.selectbox(
+                            "👑 조장 지정",
+                            range(len(updated_members)),
+                            index=min(current_leader_idx, len(updated_members)-1),
+                            format_func=lambda x: member_names_for_leader[x]
+                        )
+                        if st.form_submit_button("💾 조원 명단 저장"):
+                            db_w = load_all_data()
+                            db_w["teams_master"][edit_team_id]["members"] = updated_members
+                            db_w["teams_master"][edit_team_id]["leader_idx"] = new_leader_idx
+                            save_all_data(db_w)
+                            st.success("✅ 조원 명단이 저장되었습니다.")
+                            st.rerun()
                     
-    # --- 관리자 탭 2: 버그 리포트 & SOS 센터 ---
-    with admin_tabs[1]:
+    # --- 관리자 탭 3: 버그 리포트 & SOS 센터 ---
+    with admin_tabs[3]:
         st.subheader("📥 1:1 버그 제보 및 SOS 문의 수신함")
         
         # 2초 간격 실시간 모니터링
@@ -497,8 +640,8 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                                     st.rerun()
         show_admin_bug_reports_live()
 
-    # --- 관리자 탭 3: 전사 공지사항 송출 ---
-    with admin_tabs[2]:
+    # --- 관리자 탭 4: 전사 공지사항 송출 ---
+    with admin_tabs[4]:
         st.subheader("📢 전사 서비스 긴급 공지 배너 배포 타워")
         st.caption("이곳에서 공지를 작성하면 서비스를 사용하는 모든 팀 대시보드 최상단에 빨간색 비상 안내판이 강제 로드됩니다.")
         
@@ -525,8 +668,102 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                     save_all_data(master_db)
                     st.rerun()
 
-    # --- 관리자 탭 4: 관리자 계정 변경 & 위험 구역 (포맷 이동 배치 완료) ---
-    with admin_tabs[3]:
+    # --- 관리자 탭 5: 팀 데이터 관리 ---
+    with admin_tabs[5]:
+        st.subheader("🧹 팀 데이터 세밀 관리")
+        st.caption("특정 팀의 채팅·스토리·공지 초기화, 또는 팀 계정 완전 삭제를 수행합니다.")
+
+        all_user_ids = list(master_db["users_master"].keys())
+        if not all_user_ids:
+            st.info("등록된 팀이 없습니다.")
+        else:
+            mgmt_options = {}
+            for l_id, u_info in master_db["users_master"].items():
+                t_id = u_info["team_id"]
+                t_info = master_db["teams_master"].get(t_id, {})
+                label = f"{t_info.get('team_name', '설정중')} (조장: {l_id})"
+                mgmt_options[label] = (l_id, t_id)
+
+            selected_mgmt_label = st.selectbox("🎯 관리 대상 팀 선택", list(mgmt_options.keys()), key="mgmt_team_select")
+            mgmt_leader_id, mgmt_team_id = mgmt_options[selected_mgmt_label]
+            mgmt_team = master_db["teams_master"].get(mgmt_team_id, {})
+
+            st.write("---")
+            col_d1, col_d2 = st.columns(2)
+
+            with col_d1:
+                st.markdown("#### 🗑️ 항목별 초기화")
+                st.warning("초기화는 복구가 불가능합니다.")
+                init_chat = st.button("💬 채팅 전체 초기화", use_container_width=True, key="init_chat_btn")
+                init_story = st.button("✨ 스토리 피드 초기화", use_container_width=True, key="init_story_btn")
+                init_notice = st.button("📢 팀 공지사항 초기화", use_container_width=True, key="init_notice_btn")
+                init_chatrooms = st.button("🚪 채팅방 목록 초기화", use_container_width=True, key="init_chatrooms_btn")
+                init_calendar = st.button("📅 캘린더 일정 초기화", use_container_width=True, key="init_calendar_btn")
+
+                if init_chat:
+                    db_w = load_all_data()
+                    db_w["teams_master"][mgmt_team_id]["chats_archive"] = []
+                    save_all_data(db_w)
+                    st.success("✅ 채팅 기록이 초기화되었습니다.")
+                    st.rerun()
+                if init_story:
+                    db_w = load_all_data()
+                    db_w["teams_master"][mgmt_team_id]["stories"] = []
+                    save_all_data(db_w)
+                    st.success("✅ 스토리 피드가 초기화되었습니다.")
+                    st.rerun()
+                if init_notice:
+                    db_w = load_all_data()
+                    db_w["teams_master"][mgmt_team_id]["notices"] = []
+                    save_all_data(db_w)
+                    st.success("✅ 팀 공지사항이 초기화되었습니다.")
+                    st.rerun()
+                if init_chatrooms:
+                    db_w = load_all_data()
+                    db_w["teams_master"][mgmt_team_id]["chat_rooms"] = []
+                    db_w["teams_master"][mgmt_team_id]["chats_archive"] = []
+                    save_all_data(db_w)
+                    st.success("✅ 채팅방 목록과 대화 내역이 초기화되었습니다.")
+                    st.rerun()
+                if init_calendar:
+                    db_w = load_all_data()
+                    db_w["teams_master"][mgmt_team_id]["calendar_events"] = {}
+                    save_all_data(db_w)
+                    st.success("✅ 캘린더 일정이 초기화되었습니다.")
+                    st.rerun()
+
+            with col_d2:
+                st.markdown("#### ☣️ 팀 계정 완전 삭제")
+                st.error("팀 계정을 삭제하면 해당 조장 ID, 팀 정보, 모든 데이터가 영구 삭제됩니다.")
+                confirm_delete_team = st.checkbox(f"'{selected_mgmt_label}' 팀을 완전히 삭제하겠습니다.", key="confirm_delete_team_cb")
+                if st.button("🗑️ 선택한 팀 완전 삭제", use_container_width=True, key="delete_team_final_btn"):
+                    if confirm_delete_team:
+                        db_w = load_all_data()
+                        if mgmt_leader_id in db_w["users_master"]:
+                            del db_w["users_master"][mgmt_leader_id]
+                        if mgmt_team_id in db_w["teams_master"]:
+                            del db_w["teams_master"][mgmt_team_id]
+                        save_all_data(db_w)
+                        st.success(f"✅ '{selected_mgmt_label}' 팀이 완전히 삭제되었습니다.")
+                        st.rerun()
+                    else:
+                        st.warning("위의 삭제 동의 체크박스에 체크해야 작동합니다.")
+
+                st.write("---")
+                st.markdown("#### 📬 SOS 버그 리포트 일괄 삭제")
+                st.caption("처리 완료된 리포트만 일괄 정리합니다.")
+                if st.button("🧹 처리완료 SOS 일괄 삭제", use_container_width=True, key="clean_done_sos_btn"):
+                    db_w = load_all_data()
+                    db_w["admin_master"]["bug_reports"] = [
+                        r for r in db_w["admin_master"].get("bug_reports", [])
+                        if r["status"] != "✔️ 처리완료"
+                    ]
+                    save_all_data(db_w)
+                    st.success("✅ 처리완료된 SOS 리포트가 정리되었습니다.")
+                    st.rerun()
+
+    # --- 관리자 탭 6: 관리자 계정 변경 & 위험 구역 ---
+    with admin_tabs[6]:
         st.subheader("⚙️ 최고 권한 마스터 계정 설정 변경")
         with st.form("admin_profile_form"):
             new_ad_id = st.text_input("새 최고 관리자 ID", value=master_db["admin_master"]["admin_id"]).strip()
@@ -548,8 +785,18 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         confirm_format = st.checkbox("내가 모든 책임을 지며 시스템 원장을 전면 폭파하는 것에 동의합니다.")
         if st.button("⚠️ [관리자 마스터 최종 권한] DB 원장 전체 포맷 실행"):
             if confirm_format:
-                if os.path.exists(DB_FILE):
-                    os.remove(DB_FILE)
+                # Supabase 기반 전체 포맷: 기존 row를 DEFAULT_DB로 초기화
+                reset_db = {
+                    "users_master": {},
+                    "teams_master": {},
+                    "admin_master": {
+                        "admin_id": master_db["admin_master"]["admin_id"],
+                        "admin_pw": master_db["admin_master"]["admin_pw"],
+                        "system_notices": [],
+                        "bug_reports": []
+                    }
+                }
+                save_all_data(reset_db)
                 st.session_state.clear()
                 st.query_params.clear()
                 st.rerun()
