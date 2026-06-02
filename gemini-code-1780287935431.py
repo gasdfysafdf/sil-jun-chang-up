@@ -18,8 +18,8 @@ def load_all_data():
         except Exception:
             pass
     return {
-        "users_master": {},  # { "leader_id": {"pw": "...", "team_id": "uuid_str"} }
-        "teams_master": {}   # { "team_id_str": { 팀 세부 데이터 세트 } }
+        "users_master": {},  
+        "teams_master": {}   
     }
 
 def save_all_data(master_db):
@@ -320,11 +320,11 @@ else:
     tabs = st.tabs(tab_titles)
     tab_mapping = {title: tabs[i] for i, title in enumerate(tab_titles)}
     
-    # --- 탭 1: 공지사항 게시판 (1초 초고속 실시간 동기화) ---
+    # --- 탭 1: 공지사항 게시판 (2초 황금주기 최적화) ---
     with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 고유 공지사항")
         
-        @st.fragment(run_every=1)
+        @st.fragment(run_every=2)
         def show_notices_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -356,12 +356,12 @@ else:
                         st.success("공지가 실시간 전송되었습니다!")
                         st.rerun()
         else:
-            st.caption("💡 공지사항 편집 권한은 마스터 조장 전용입니다. (1초 간격 실시간 자동 동기화)")
+            st.caption("💡 공지사항 편집 권한은 마스터 조장 전용입니다. (2초 간격 실시간 자동 동기화)")
             
         st.write("---")
         show_notices_live()
 
-    # --- 탭 2: 피드 광장 (1초 초고속 실시간 동기화) ---
+    # --- 탭 2: 피드 광장 (2초 황금주기 최적화) ---
     with tab_mapping["✨ 스토리 피드 광장"]:
         st.subheader("📸 우리 팀 스토리 피드 보드")
         col_up, col_view = st.columns([2, 3])
@@ -387,7 +387,7 @@ else:
                     st.rerun()
                     
         with col_view:
-            @st.fragment(run_every=1)
+            @st.fragment(run_every=2)
             def show_stories_live():
                 fresh_db = load_all_data()
                 fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -415,11 +415,11 @@ else:
                                 st.rerun()
             show_stories_live()
 
-    # --- 탭 3: 기여도 차트 (1초 초고속 실시간 동기화) ---
+    # --- 탭 3: 기여도 차트 (2초 황금주기 최적화) ---
     with tab_mapping["📊 기여도 주식 차트"]:
         st.subheader("📊 조원 기여 가치 지분 대시보드")
         
-        @st.fragment(run_every=1)
+        @st.fragment(run_every=2)
         def show_stocks_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -447,7 +447,7 @@ else:
                     st.line_chart(chart_df)
         show_stocks_live()
 
-    # --- 탭 4: 달력 일정 관리 (1초 초고속 실시간 동기화) ---
+    # --- 탭 4: 달력 일정 관리 (2초 황금주기 최적화) ---
     with tab_mapping["📅 달력 일정 관리"]:
         st.subheader("📅 우리 팀 업무 결재선 타임라인")
         
@@ -480,7 +480,7 @@ else:
         
         st.write("---")
         
-        @st.fragment(run_every=1)
+        @st.fragment(run_every=2)
         def show_calendar_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -577,7 +577,7 @@ else:
                 st.success("명단 배포 완료!")
                 st.rerun()
 
-    # --- 탭 6: 카톡형 커스텀 단체/1:1 채팅 메신저 (1초 초고속 방생성 동기화 반영) ---
+    # --- 탭 6: 카톡형 커스텀 메신저 (2초 최적화 렉 프리 버전) ---
     with tab_mapping["💬 멀티 카톡방 메신저"]:
         st.subheader("💬 우리 조 전용 실시간 커스텀 채팅방 포털")
         
@@ -589,7 +589,6 @@ else:
         if "chat_rooms" not in team_data: team_data["chat_rooms"] = []
         if "chats_archive" not in team_data: team_data["chats_archive"] = []
         
-        # 상단 레이아웃 - 새 채팅방 생성 폼
         with st.expander("➕ 새로운 단체/1:1 채팅방 개설하기", expanded=False):
             st.markdown("**방에 참가할 인원을 선택해 주세요 (나 포함 여러 명 선택 가능)**")
             choose_members = st.multiselect("채팅방 멤버 구성", all_associates, default=[my_chat_name])
@@ -608,7 +607,6 @@ else:
                         
                     new_room_id = str(uuid.uuid4())
                     
-                    # 마스터 DB 로드 후 안전하게 밀어넣기
                     m_db = load_all_data()
                     m_db["teams_master"][st.session_state.current_team_id].setdefault("chat_rooms", []).append({
                         "room_id": new_room_id,
@@ -622,19 +620,17 @@ else:
                     
         st.write("---")
         
-        # 🚨 [핵심 수정] 좌측 채팅방 목록 및 우측 메세지 피드를 통째로 1초 프래그먼트로 래핑하여 방 목록 실시간 동기화 구현!
-        @st.fragment(run_every=1)
+        # 🚨 2초 주기로 타협하여 렌더링 렉을 완벽하게 예방하는 채팅 코어 컴포넌트
+        @st.fragment(run_every=2)
         def show_entire_chat_system_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, {"chat_rooms": [], "chats_archive": []})
             
             col_rooms, col_chat_window = st.columns([1, 2])
-            
-            # 내가 참여자로 들어가 있는 방만 실시간 필터링
             my_accessible_rooms = [r for r in fresh_team.get("chat_rooms", []) if my_chat_name in r.get("members", [])]
             
             with col_rooms:
-                st.write("📥 **내 참여 채팅방 리스트 (1초 자동동기화)**")
+                st.write("📥 **내 참여 채팅방 리스트 (2초 자동동기화)**")
                 if not my_accessible_rooms:
                     st.caption("참여 중인 채팅방이 없습니다.")
                 else:
@@ -642,7 +638,6 @@ else:
                         is_active = (st.session_state.active_chat_room_id == rm["room_id"])
                         label = f"💬 {rm['title']} ({len(rm['members'])}명)" + (" (열림)" if is_active else "")
                         
-                        # Fragment 내부의 고유 버튼 클릭 이벤트 바인딩
                         if st.button(label, key=f"room_tab_{rm['room_id']}", use_container_width=True):
                             st.session_state.active_chat_room_id = rm["room_id"]
                             st.rerun()
@@ -657,7 +652,6 @@ else:
                     st.markdown(f"### 💬 **{target_room['title']}**")
                     st.caption(f"👥 참여 멤버: {', '.join(target_room['members'])}")
                     
-                    # 대화 메시지 뷰박스 출력
                     msg_box = st.container(height=320)
                     with msg_box:
                         for chat in fresh_team.get("chats_archive", []):
@@ -668,7 +662,6 @@ else:
                                 else:
                                     st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
                     
-                    # 메세지 입력 필드 (Fragment 렌더링 최적화 폼)
                     with st.form(f"msg_send_form_{target_room['room_id']}", clear_on_submit=True):
                         text_input = st.text_input("메시지 입력", placeholder="대화를 입력해 보세요.", key=f"chat_text_in_{target_room['room_id']}")
                         if st.form_submit_button("🚀 전송") and text_input.strip():
