@@ -5,21 +5,38 @@ import pickle
 import uuid
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="스타트리 (Startree)", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="스타트리 (Startree) - 마스터 통합본", page_icon="🌳", layout="wide")
 
 DB_FILE = "startree_multi_team_db.pkl"
 
-# --- [멀티팀 데이터베이스 엔진] ---
+# --- [멀티팀 & 관리자 데이터베이스 엔진] ---
 def load_all_data():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "rb") as f:
-                return pickle.load(f)
+                db = pickle.load(f)
+                # 하위 호환성 및 신규 관리자 스토리지 확장 보정
+                if "admin_master" not in db:
+                    db["admin_master"] = {
+                        "admin_id": "root_manager_star",
+                        "admin_pw": "StarTree#Admin99!!",
+                        "system_notices": [],
+                        "bug_reports": []
+                    }
+                return db
         except Exception:
             pass
+            
+    # 최초 실행 시 초기 구조 생성 및 마스터 계정 안전 인서트
     return {
         "users_master": {},  
-        "teams_master": {}   
+        "teams_master": {},
+        "admin_master": {
+            "admin_id": "root_manager_star",
+            "admin_pw": "StarTree#Admin99!!",
+            "system_notices": [],
+            "bug_reports": []
+        }
     }
 
 def save_all_data(master_db):
@@ -40,12 +57,12 @@ if "step" not in st.session_state:
 if "active_chat_room_id" not in st.session_state:
     st.session_state.active_chat_room_id = None  
 
-# 🔗 초대 링크 트래킹 및 검증 로직
+# 🔗 초대 링크 트래킹 및 검증 로직 (관리자가 아닐 때만 작동)
 qp = st.query_params
 if "invite" in qp and "team_id" in qp:
     target_team = qp["team_id"]
     if target_team in master_db["teams_master"]:
-        if st.session_state.step != "main_home" and st.session_state.current_user is None:
+        if st.session_state.step != "main_home" and st.session_state.step != "admin_dashboard" and st.session_state.current_user is None:
             st.session_state.current_team_id = target_team
             st.session_state.user_role = "member"
             st.session_state.step = "member_auth"
@@ -72,9 +89,12 @@ with st.sidebar:
         
     st.write("---")
     if st.session_state.current_user:
-        role_label = "👑 조장" if st.session_state.user_role == "leader" else "👤 조원"
-        t_name_display = team_data.get('team_name', '설정중') if team_data else "설정중"
-        st.success(f"소속 조: {t_name_display}\n\n접속자: {st.session_state.current_user} [{role_label}]")
+        if st.session_state.user_role == "admin":
+            st.error(f"👑 최고 마스터 관리자 권한\n\n접속 계정: {st.session_state.current_user}")
+        else:
+            role_label = "👑 조장" if st.session_state.user_role == "leader" else "👤 조원"
+            t_name_display = team_data.get('team_name', '설정중') if team_data else "설정중"
+            st.success(f"소속 조: {t_name_display}\n\n접속자: {st.session_state.current_user} [{role_label}]")
         
         if st.button("To. 로그아웃 (접속 종료)", use_container_width=True):
             st.session_state.current_user = None
@@ -88,13 +108,7 @@ with st.sidebar:
         st.warning("상용화 멀티팀 독립 세션 구동 중")
         
     st.write("---")
-    st.caption("🚨 마스터 포맷 시 파일 데이터 전체가 증발하므로 주의하세요.")
-    if st.button("⚠️ [관리자] 마스터 DB 전체 포맷"):
-        if os.path.exists(DB_FILE):
-            os.remove(DB_FILE)
-        st.session_state.clear()
-        st.query_params.clear()
-        st.rerun()
+    st.caption("⚙️ Startree Enterprise v2.0 (2026)")
 
 # ==========================================
 # [분기 1] 조원 전용 초대 링크 접속 처리 화면
@@ -124,18 +138,28 @@ if st.session_state.step == "member_auth" and team_data:
             st.rerun()
 
 # ==========================================
-# [분기 2] 조장 로그인 화면
+# [분기 2] 대통합 로그인 화면 (3안 공유 로그인 방식 인터셉트)
 # ==========================================
 elif st.session_state.step == "auth_login":
-    st.title("🔐 스타트리 조장 로그인 포털")
+    st.title("🔐 스타트리 통합 로그인 포털")
     
-    login_id = st.text_input("조장 아이디", key="login_id_input").strip()
-    login_pw = st.text_input("비밀번호", type="password", key="login_pw_input").strip()
+    login_id = st.text_input("아이디(ID)", key="login_id_input").strip()
+    login_pw = st.text_input("비밀번호(PW)", type="password", key="login_pw_input").strip()
     
     col_l1, col_l2 = st.columns(2)
     with col_l1:
         if st.button("로그인하기", use_container_width=True):
-            if login_id in master_db["users_master"] and master_db["users_master"][login_id]["pw"] == login_pw:
+            # 🔑 [A] 최고 관리자(Master Admin) 로그인 검증 (대소문자 엄격 구분)
+            admin_cfg = master_db["admin_master"]
+            if login_id == admin_cfg["admin_id"] and login_pw == admin_cfg["admin_pw"]:
+                st.session_state.current_user = login_id
+                st.session_state.user_role = "admin"
+                st.session_state.step = "admin_dashboard"
+                st.success("👑 최고 마스터 관리자 인증에 성공했습니다. 관제탑을 로드합니다.")
+                st.rerun()
+                
+            # 👥 [B] 일반 프로젝트 조장 로그인 검증
+            elif login_id in master_db["users_master"] and master_db["users_master"][login_id]["pw"] == login_pw:
                 user_info = master_db["users_master"][login_id]
                 st.session_state.current_user = login_id
                 st.session_state.user_role = "leader"
@@ -147,14 +171,14 @@ elif st.session_state.step == "auth_login":
                     st.session_state.step = "setup_1"
                 st.rerun()
             else:
-                st.error("아이디 또는 비밀번호가 잘못되었습니다.")
+                st.error("아이디 또는 비밀번호가 잘못되었습니다. (대소문자 구분 확인)")
     with col_l2:
         if st.button("새로운 팀 개설하기 (조장 가입)", use_container_width=True):
             st.session_state.step = "auth_register"
             st.rerun()
 
 # ==========================================
-# [분기 3] 조장 회원가입 (고유 컨테이너 ID 할당)
+# [분기 3] 조장 회원가입
 # ==========================================
 elif st.session_state.step == "auth_register":
     st.title("📝 신규 프로젝트 팀 등록 마법사")
@@ -168,8 +192,8 @@ elif st.session_state.step == "auth_register":
     if st.button("아이디 중복 검증"):
         if not reg_id:
             st.warning("아이디를 입력하세요.")
-        elif reg_id in master_db["users_master"]:
-            st.error("❌ 이미 존재하거나 사용 중인 조장 ID입니다.")
+        elif reg_id in master_db["users_master"] or reg_id == master_db["admin_master"]["admin_id"]:
+            st.error("❌ 이미 존재하거나 사용 중인 시스템 ID입니다.")
             st.session_state.id_checked = False
         else:
             st.success("✔️ 사용 가능한 멋진 아이디입니다.")
@@ -272,7 +296,6 @@ elif st.session_state.step == "setup_link":
     
     host = st.context.headers.get("Host", "localhost:8501")
     protocol = "https" if "localhost" not in host else "http"
-    
     v_link = f"{protocol}://{host}/?invite=true&team_id={st.session_state.current_team_id}"
     
     st.info(v_link)
@@ -294,7 +317,165 @@ elif st.session_state.step == "setup_link":
         st.rerun()
 
 # ==========================================
-# [분기 5] 최종 메인 비즈니스 워크스페이스 레이어
+# [분기 5] 👑 최고 마스터 관리자(Admin) 관제탑 레이어
+# ==========================================
+elif st.session_state.step == "admin_dashboard" and st.session_state.user_role == "admin":
+    st.title("🌳 스타트리 시스템 통합 관제탑 (Master Admin Portal)")
+    st.markdown(f"**⚡ 현재 일시:** {datetime.now().strftime('%Y-%m-%d %H:%M')} | **🔑 관리 계정:** {st.session_state.current_user} [🚨 최고권한 마스터]")
+    st.write("---")
+    
+    admin_tabs = st.tabs(["👥 조장 및 팀 정보 제어실", "🚨 SOS 버그 제보 수신함", "📢 전사 긴급 공지 송출", "⚙️ 마스터 보안 및 위험구역"])
+    
+    # --- 관리자 탭 1: 조장 및 팀 통합 관리 원장 ---
+    with admin_tabs[0]:
+        st.subheader("🗂️ 가입 팀 및 조장 계정 마스터 원장")
+        st.caption("현재 플랫폼에 등록된 모든 조장의 아이디와 비밀번호 실시간 리스트입니다.")
+        
+        if not master_db["users_master"]:
+            st.info("현재 가입된 프로젝트 팀(조장)이 존재하지 않습니다.")
+        else:
+            team_records = []
+            for l_id, u_info in master_db["users_master"].items():
+                t_id = u_info["team_id"]
+                t_info = master_db["teams_master"].get(t_id, {})
+                team_records.append({
+                    "조장 ID": l_id,
+                    "비밀번호": u_info["pw"],
+                    "팀 고유 고유 ID": t_id,
+                    "조 이름": t_info.get("team_name", "초기 설정 미완료"),
+                    "프로젝트 주제": t_info.get("subject", "-"),
+                    "조원 수": len(t_info.get("members", []))
+                })
+            
+            st.table(pd.DataFrame(team_records))
+            
+            st.write("---")
+            st.markdown("#### 🔑 조장 비밀번호 긴급 변경 복구소")
+            col_ad1, col_ad2 = st.columns(2)
+            with col_ad1:
+                target_edit_leader = st.selectbox("비밀번호를 재발급할 조장 ID 선택", list(master_db["users_master"].keys()))
+            with col_ad2:
+                new_assigned_pw = st.text_input("새로 지정할 원격 강제 비밀번호", placeholder="예: temporary1234!")
+                
+            if st.button("🔒 해당 조장 비밀번호 원격 강제 변경 배포"):
+                if new_assigned_pw.strip():
+                    master_db["users_master"][target_edit_leader]["pw"] = new_assigned_pw.strip()
+                    save_all_data(master_db)
+                    st.success(f"🎉 조장 [{target_edit_leader}]의 비밀번호가 성공적으로 변경되었습니다!")
+                    st.rerun()
+                    
+    # --- 관리자 탭 2: 버그 리포트 & SOS 센터 ---
+    with admin_tabs[1]:
+        st.subheader("📥 1:1 버그 제보 및 SOS 문의 수신함")
+        
+        # 2초 간격 실시간 모니터링
+        @st.fragment(run_every=2)
+        def show_admin_bug_reports_live():
+            fresh_db = load_all_data()
+            reports = fresh_db["admin_master"].get("bug_reports", [])
+            
+            if not reports:
+                st.info("현재 접수된 SOS 버그 문의가 없습니다. 시스템 정상 가동 중")
+            else:
+                for idx, rep in enumerate(reversed(reports)):
+                    # 역순 인덱스 정합성 매칭
+                    true_idx = len(reports) - 1 - idx
+                    with st.container(border=True):
+                        col_r1, col_r2 = st.columns([3, 1])
+                        with col_r1:
+                            status_badge = "🟢 완료" if rep["status"] == "✔️ 처리완료" else "⏳ 대기"
+                            st.markdown(f"### [{status_badge}] {rep['team_name']} - {rep['sender']} 조원")
+                            st.caption(f"📅 제보 시간: {rep['time']} | 🆔 팀 ID: {rep['team_id']}")
+                            st.warning(f"💬 내용: {rep['content']}")
+                        with col_r2:
+                            if rep.get("image_bytes"):
+                                st.image(rep["image_bytes"], caption="📷 클릭 시 확대 가능", use_container_width=True)
+                            else:
+                                st.caption("첨부 이미지 없음")
+                        
+                        if rep.get("reply"):
+                            st.info(f"👑 내 답변: {rep['reply']}")
+                        
+                        # 답변 작성 폼
+                        with st.form(f"admin_reply_form_{rep['report_id']}_{true_idx}", clear_on_submit=True):
+                            reply_text = st.text_input("답변 내용 기입", key=f"admin_rep_in_{rep['report_id']}_{true_idx}")
+                            c_b1, c_b2 = st.columns(2)
+                            with c_b1:
+                                if st.form_submit_button("🚀 답변 전송 및 완료"):
+                                    db_write = load_all_data()
+                                    db_write["admin_master"]["bug_reports"][true_idx]["reply"] = reply_text.strip()
+                                    db_write["admin_master"]["bug_reports"][true_idx]["status"] = "✔️ 처리완료"
+                                    save_all_data(db_write)
+                                    st.rerun()
+                            with c_b2:
+                                if st.form_submit_button("🗑️ 리포트 영구 삭제"):
+                                    db_write = load_all_data()
+                                    db_write["admin_master"]["bug_reports"].pop(true_idx)
+                                    save_all_data(db_write)
+                                    st.rerun()
+        show_admin_bug_reports_live()
+
+    # --- 관리자 탭 3: 전사 공지사항 송출 ---
+    with admin_tabs[2]:
+        st.subheader("📢 전사 서비스 긴급 공지 배너 배포 타워")
+        st.caption("이곳에서 공지를 작성하면 서비스를 사용하는 모든 팀 대시보드 최상단에 빨간색 비상 안내판이 강제 로드됩니다.")
+        
+        with st.form("sys_notice_form", clear_on_submit=True):
+            sys_msg = st.text_area("공지 내용 (예: 금일 서버 점검 안내 등)")
+            if st.form_submit_button("🚨 전 시스템 강제 긴급 공지 송출"):
+                if sys_msg.strip():
+                    master_db["admin_master"].setdefault("system_notices", []).insert(0, {
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "msg": sys_msg.strip()
+                    })
+                    save_all_data(master_db)
+                    st.success("전사 공지가 성공적으로 배포되었습니다!")
+                    st.rerun()
+                    
+        st.write("---")
+        st.markdown("#### 📜 송출 중인 전사 공지 히스토리")
+        for idx, sn in enumerate(master_db["admin_master"].get("system_notices", [])):
+            with st.container(border=True):
+                st.caption(f"📅 {sn['time']}")
+                st.write(sn["msg"])
+                if st.button("🗑️ 삭제", key=f"del_sys_n_{idx}"):
+                    master_db["admin_master"]["system_notices"].pop(idx)
+                    save_all_data(master_db)
+                    st.rerun()
+
+    # --- 관리자 탭 4: 관리자 계정 변경 & 위험 구역 (포맷 이동 배치 완료) ---
+    with admin_tabs[3]:
+        st.subheader("⚙️ 최고 권한 마스터 계정 설정 변경")
+        with st.form("admin_profile_form"):
+            new_ad_id = st.text_input("새 최고 관리자 ID", value=master_db["admin_master"]["admin_id"]).strip()
+            new_ad_pw = st.text_input("새 최고 관리자 비밀번호", value=master_db["admin_master"]["admin_pw"], type="password").strip()
+            if st.form_submit_button("마스터 계정 정보 즉시 갱신"):
+                if new_ad_id and new_ad_pw:
+                    master_db["admin_master"]["admin_id"] = new_ad_id
+                    master_db["admin_master"]["admin_pw"] = new_ad_pw
+                    save_all_data(master_db)
+                    st.success("관리자 프로필이 변경되었습니다. 다음 로그인부터 적용됩니다.")
+                    st.rerun()
+                    
+        st.write("---")
+        st.error("☣️ 위험 구역 (Danger Zone) - 일반 사용자 화면에서 격리됨")
+        st.markdown("#### 🚨 시스템 마스터 DB 포맷")
+        st.caption("이 버튼을 누르면 가입된 모든 팀의 데이터, 조장 계정, 채팅 아카이브, 버그 리포트가 소스에서 전면 파괴됩니다.")
+        
+        # 실수 방지 2중 안전 잠금장치
+        confirm_format = st.checkbox("내가 모든 책임을 지며 시스템 원장을 전면 폭파하는 것에 동의합니다.")
+        if st.button("⚠️ [관리자 마스터 최종 권한] DB 원장 전체 포맷 실행"):
+            if confirm_format:
+                if os.path.exists(DB_FILE):
+                    os.remove(DB_FILE)
+                st.session_state.clear()
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.warning("위의 파괴 동의 체크박스에 체크해야 작동합니다.")
+
+# ==========================================
+# [분기 6] 최종 메인 비즈니스 워크스페이스 레이어
 # ==========================================
 else:
     if not team_data:
@@ -303,17 +484,18 @@ else:
         
     current_name = st.session_state.current_user
     is_leader = (st.session_state.user_role == "leader")
-    
-    if is_leader and leader_name != "미정":
-        my_chat_name = leader_name
-    else:
-        my_chat_name = current_name
+    my_chat_name = leader_name if (is_leader and leader_name != "미정") else current_name
+
+    # 🚨 [신규 기능 연동] 전사 긴급 공지 실시간 강제 상단 팝업 로드
+    if master_db["admin_master"].get("system_notices"):
+        latest_sys_notice = master_db["admin_master"]["system_notices"][0]
+        st.error(f"📢 [전사 시스템 마스터 긴급 긴급 공지 - {latest_sys_notice['time']}]\n\n{latest_sys_notice['msg']}")
 
     st.title(f"🌳 {team_data.get('team_name', '우리팀')} 독점 워크스페이스")
     st.markdown(f"**🎯 주제:** {team_data.get('subject', '과제 주제')} | **👑 총괄조장:** {leader_name} | **👤 접속자:** {my_chat_name} ({'조장 플러그인' if is_leader else '조원 플러그인'})")
     st.write("---")
 
-    tab_titles = ["📢 팀 홈 및 공지사항", "✨ 스토리 피드 광장", "📊 기여도 주식 차트", "📅 달력 일정 관리", "💬 멀티 카톡방 메신저"]
+    tab_titles = ["📢 팀 홈 및 공지사항", "✨ 스토리 피드 광장", "📊 기여도 주식 차트", "📅 달력 일정 관리", "💬 멀티 카톡방 메신저", "🚨 관리자 SOS 고객센터"]
     if is_leader:
         tab_titles.insert(4, "👥 조원 정보 수정창")
         
@@ -631,7 +813,7 @@ else:
                 st.success("🎉 성명 변경 사항이 성공적으로 통합 반영되었습니다!")
                 st.rerun()
 
-    # --- 탭 6: 카톡형 커스텀 메신저 (나가기 기능 추가 탑재) ---
+    # --- 탭 6: 카톡형 커스텀 메신저 ---
     with tab_mapping["💬 멀티 카톡방 메신저"]:
         st.subheader("💬 우리 조 전용 실시간 커스텀 채팅방 포털")
         
@@ -680,7 +862,6 @@ else:
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, {"chat_rooms": [], "chats_archive": []})
             
             col_rooms, col_chat_window = st.columns([1, 2])
-            # 내가 멤버 명단에 들어있는 방만 노출 (방을 나가면 목록에서 자연스럽게 제외됨)
             my_accessible_rooms = [r for r in fresh_team.get("chat_rooms", []) if my_chat_name in r.get("members", [])]
             
             with col_rooms:
@@ -709,8 +890,7 @@ else:
                         st.caption(f"👥 참여 멤버: {', '.join(target_room['members'])}")
                     
                     with c_exit:
-                        # 🚪 [방 나가기 기능 컴포넌트 버튼]
-                        if st.button("🚪 이 방 나가기", key=f"exit_room_{target_room['room_id']}", use_container_width=True, type="secondary"):
+                        if st.button("🚪 이 방 나가기", key=f"exit_room_{target_room['room_id']}", use_container_width=True):
                             db_write = load_all_data()
                             target_team_db = db_write["teams_master"][st.session_state.current_team_id]
                             
@@ -749,3 +929,65 @@ else:
                             st.rerun()
 
         show_entire_chat_system_live()
+
+    # --- [🚨 신규 핵심 연동] 탭 7: 사용자용 관리자 SOS 고객센터 ---
+    with tab_mapping["🚨 관리자 SOS 고객센터"]:
+        st.subheader("🚨 시스템 마스터 버그 제보 및 1:1 SOS 소통 창구")
+        st.markdown("프로젝트 앱 사용 도중 버그, 데이터 오류, 먹통 현상이 발생하면 **상세 내용과 함께 스크린샷 화면**을 첨부해 마스터 관리자에게 즉시 원격 제보할 수 있습니다.")
+        
+        col_sos1, col_sos2 = st.columns([2, 3])
+        
+        with col_sos1:
+            st.markdown("#### 🛠️ 버그 및 문의 접수")
+            with st.form("bug_report_user_form", clear_on_submit=True):
+                bug_content = st.text_area("버그 현상 및 요청사항 상세 기입", placeholder="어떤 메뉴에서 어떤 에러가 나는지 적어주시면 빠르게 복구됩니다.")
+                bug_img = st.file_uploader("오류 캡처 이미지 업로드 (선택)", type=["png", "jpg", "jpeg"])
+                
+                if st.form_submit_button("🚨 마스터 관제탑으로 SOS 긴급 전송"):
+                    if bug_content.strip():
+                        img_bytes = None
+                        img_name = "없음"
+                        if bug_img is not None:
+                            img_bytes = bug_img.read()
+                            img_name = bug_img.name
+                            
+                        m_db = load_all_data()
+                        m_db["admin_master"].setdefault("bug_reports", []).append({
+                            "report_id": str(uuid.uuid4()),
+                            "team_id": st.session_state.current_team_id,
+                            "team_name": team_data.get('team_name', '우리팀'),
+                            "sender": my_chat_name,
+                            "content": bug_content.strip(),
+                            "image_bytes": img_bytes,
+                            "image_name": img_name,
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "reply": None,
+                            "status": "⏳ 대기중"
+                        })
+                        save_all_data(m_db)
+                        st.success("🎉 관리자 앱으로 SOS 버그 제보가 실시간 접수되었습니다!")
+                        st.rerun()
+                        
+        with col_sos2:
+            st.markdown("#### 📬 내 제보 건 실시간 처리 및 관리자 답변 현황")
+            
+            @st.fragment(run_every=2)
+            def show_my_sos_status_live():
+                fresh_db = load_all_data()
+                all_reports = fresh_db["admin_master"].get("bug_reports", [])
+                # 내 팀의 제보만 필터링
+                my_team_reports = [r for r in all_reports if r["team_id"] == st.session_state.current_team_id]
+                
+                if not my_team_reports:
+                    st.caption("아직 접수하신 문의 내역이 없습니다.")
+                else:
+                    for my_rep in reversed(my_team_reports):
+                        with st.container(border=True):
+                            badge = "🟢 처리 완료" if my_rep["status"] == "✔️ 처리완료" else "⏳ 마스터 검토 중"
+                            st.markdown(f"**[{badge}] 문의 일시: {my_rep['time']}**")
+                            st.write(f"**내 제보:** {my_rep['content']}")
+                            if my_rep.get("reply"):
+                                st.info(f"👑 **관리자 오피셜 답변:** {my_rep['reply']}")
+                            else:
+                                st.caption("💬 관리자의 답변을 실시간 대기하고 있습니다.")
+            show_my_sos_status_live()
