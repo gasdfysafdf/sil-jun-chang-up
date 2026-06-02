@@ -26,6 +26,7 @@ if "app_data" not in st.session_state:
         st.session_state.app_data = {
             "users_db": {},               
             "current_user": None,          
+            "user_role": "leader", # leader 또는 member
             "step": "auth_login",          
             "member_count": 1,
             "members": [],                 
@@ -45,18 +46,28 @@ if "app_data" not in st.session_state:
 data = st.session_state.app_data
 m_names = [m["이름"] for m in data["members"] if m["이름"]]
 
+# 🔗 [핵심] 조원 초대 링크 매커니즘 작동 확인 (?invite=true 감지)
+query_params = st.query_params
+if "invite" in query_params and data["step"] not in ["main_home", "member_auth"]:
+    data["step"] = "member_auth"
+    data["user_role"] = "member"
+    save_data(data)
+
 # 사이드바 제어창
 with st.sidebar:
     st.title("🌳 스타트리 검증 모드")
     if data["current_user"]:
-        st.success(f"🔐 로그인 계정: {data['current_user']}")
-        if st.button("로그아웃"):
+        role_label = "👑 조장" if data["user_role"] == "leader" else "👤 조원"
+        st.success(f"🔐 로그인 계정: {data['current_user']} [{role_label}]")
+        if st.button("로그아웃/접속종료"):
             data["current_user"] = None
+            data["user_role"] = "leader"
             data["step"] = "auth_login"
+            st.query_params.clear() # 쿼리 파라미터 초기화
             save_data(data)
             st.rerun()
     else:
-        st.warning("로그인이 필요한 상태입니다.")
+        st.warning("로그인이 필요하거나 초대 링크가 필요한 상태입니다.")
         
     st.write("---")
     if st.button("⚠️ 시스템 전체 초기화"):
@@ -65,6 +76,7 @@ with st.sidebar:
         st.session_state.app_data = {
             "users_db": {},
             "current_user": None,
+            "user_role": "leader",
             "step": "auth_login",
             "member_count": 1,
             "members": [],
@@ -75,10 +87,31 @@ with st.sidebar:
             "end_date": datetime.today().date() + timedelta(days=7),
             "calendar_events": {}, "notices": [], "chats": [], "stories": [], "stocks": {}, "stock_logs": {}
         }
+        st.query_params.clear()
         st.rerun()
 
-# 1. 로그인 화면
-if data["step"] == "auth_login":
+# [분기 1] 조원 링크 전용 본인 인증 화면
+if data["step"] == "member_auth":
+    st.title("🔗 스타트리 조원 워크스페이스 초대")
+    st.subheader(f"🌳 '{data['team_name']}' 팀에 초대되셨습니다!")
+    st.caption("조장이 생성한 링크를 통해 가입 없이 즉시 참여가 가능한 조원 전용 모드입니다.")
+    
+    if not m_names:
+        st.error("조장이 아직 조원 정보를 등록하지 않았습니다. 조장에게 명단 등록을 요청하세요.")
+    else:
+        st.info("💡 동명이인이 있을 경우 조장이 식별 기호(예: 이름1, 이름A)를 붙여두었으니 본인의 이름을 정확히 선택하세요.")
+        selected_member = st.selectbox("👤 당신은 누구인가요? 이름을 선택해주세요.", m_names)
+        
+        if st.button("🎉 팀 워크스페이스 입장하기"):
+            data["current_user"] = selected_member
+            data["user_role"] = "member"
+            data["step"] = "main_home"
+            save_data(data)
+            st.success(f"{selected_member} 조원님 환영합니다! 홈화면으로 이동합니다.")
+            st.rerun()
+
+# 1. 로그인 화면 (조장 전용)
+elif data["step"] == "auth_login":
     st.title("🔐 스타트리 조장 로그인")
     st.caption("대학생 팀플 라이트 ERP 스타트리 MVP 시연 버전입니다.")
     
@@ -90,6 +123,7 @@ if data["step"] == "auth_login":
         if st.button("로그인하기"):
             if login_id in data["users_db"] and data["users_db"][login_id] == login_pw:
                 data["current_user"] = login_id
+                data["user_role"] = "leader"
                 
                 if data["team_name"].strip() and data["members"]:
                     data["step"] = "main_home"
@@ -222,9 +256,10 @@ elif data["step"] == "setup_link":
     st.title("🔗 조원 초대 링크 생성 완료")
     st.subheader("다른 조원들에게 아래의 워크스페이스 참여 링크를 공유하세요!")
     
-    v_link = f"https://startree.app/workspace/join?team={data['team_name']}&id=master_shared"
+    # 배포 환경을 고려하여 쿼리스트링 기반 실주소 형태로 설계
+    v_link = "https://startree.streamlit.app/?invite=true"
     st.info(v_link)
-    st.caption("초대받은 조원들은 복잡한 가입 절차 없이, 이 링크 하나로 즉시 홈화면에 바로 접속할 수 있습니다.")
+    st.caption("초대받은 조원들은 복잡한 가입 절차 없이, 이 링크 하나로 진입하여 자기 이름만 고르면 홈화면에 바로 접속할 수 있습니다.")
     
     if st.button("🎉 링크 복사 확인 및 홈화면 진입"):
         for m in data["members"]:
@@ -238,43 +273,51 @@ elif data["step"] == "setup_link":
 # 9. 메인 워크스페이스 홈화면
 else:
     leader_name = data["members"][data["leader_idx"]]["이름"] if data["members"] else "미정"
+    current_name = data["current_user"]
+    is_leader = (data["user_role"] == "leader")
     
     st.title(f"🌳 {data['team_name']} 워크스페이스")
-    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 조장:** {leader_name}")
+    st.markdown(f"**🎯 주제:** {data['subject']} | **👑 조장:** {leader_name} | **👤 접속자:** {current_name} ({'조장 모드' if is_leader else '조원 모드'})")
     st.write("---")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📢 팀 홈 및 공지사항", 
-        "✨ 스토리 피드 광장", 
-        "📊 기여도 주식 차트", 
-        "📅 달력 일정 관리", 
-        "👥 조원 정보 수정창", 
-        "💬 다중 대상 DM방"
-    ])
+    # 조원 모드일 때는 '조원 정보 수정창' 탭 노출 차단
+    tab_titles = ["📢 팀 홈 및 공지사항", "✨ 스토리 피드 광장", "📊 기여도 주식 차트", "📅 달력 일정 관리", "💬 다중 대상 DM방"]
+    if is_leader:
+        tab_titles.insert(4, "👥 조원 정보 수정창")
+        
+    tabs = st.tabs(tab_titles)
+    
+    # 구조 분기를 위해 사전 맵핑 처리
+    tab_mapping = {title: tabs[i] for i, title in enumerate(tab_titles)}
     
     # 탭 1: 공지사항 게시판
-    with tab1:
+    with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 공지사항 관리")
-        with st.form("notice_form", clear_on_submit=True):
-            notice_text = st.text_area("공지글 내용을 입력하세요.")
-            uploaded_file = st.file_uploader("공지 첨부파일")
-            submit_notice = st.form_submit_button("공지 등록")
-            if submit_notice and notice_text.strip():
-                file_name = "첨부 파일 없음"
-                file_bytes = None
-                if uploaded_file is not None:
-                    file_name = uploaded_file.name
-                    file_bytes = uploaded_file.read()
-                    
-                data["notices"].insert(0, {
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "content": notice_text,
-                    "file_name": file_name,
-                    "file_bytes": file_bytes
-                })
-                save_data(data)
-                st.success("공지가 등록되었습니다.")
-                st.rerun()
+        
+        # 조장만 공지 등록 허용
+        if is_leader:
+            with st.form("notice_form", clear_on_submit=True):
+                notice_text = st.text_area("공지글 내용을 입력하세요.")
+                uploaded_file = st.file_uploader("공지 첨부파일")
+                submit_notice = st.form_submit_button("공지 등록")
+                if submit_notice and notice_text.strip():
+                    file_name = "첨부 파일 없음"
+                    file_bytes = None
+                    if uploaded_file is not None:
+                        file_name = uploaded_file.name
+                        file_bytes = uploaded_file.read()
+                        
+                    data["notices"].insert(0, {
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "content": notice_text,
+                        "file_name": file_name,
+                        "file_bytes": file_bytes
+                    })
+                    save_data(data)
+                    st.success("공지가 등록되었습니다.")
+                    st.rerun()
+        else:
+            st.caption("💡 공지사항 등록 권한은 조장에게만 있습니다.")
         
         st.write("---")
         st.markdown("#### 📋 등록된 공지 목록")
@@ -293,8 +336,8 @@ else:
                 else:
                     st.caption("📎 첨부 파일 없음")
 
-    # 탭 2: 피드 광장
-    with tab2:
+    # 탭 2: 피드 광장 (조장/조원 공통 피드 작성 및 하트/댓글 소통 창구)
+    with tab_mapping["✨ 스토리 피드 광장"]:
         st.subheader("📸 나의 팀플 스토리 업로드")
         col_up, col_view = st.columns([2, 3])
         
@@ -320,8 +363,9 @@ else:
                         elif st_media.name.endswith((".mp3", ".wav")):
                             media_type = "audio"
                             
+                    display_user_name = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
                     data["stories"].insert(0, {
-                        "user": f"{leader_name}(조장)", 
+                        "user": display_user_name, 
                         "content": st_text,
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "media_type": media_type,
@@ -363,15 +407,16 @@ else:
                         with st.form(f"comment_f_{idx}", clear_on_submit=True):
                             c_text = st.text_input("댓글 남기기", key=f"cm_t_{idx}")
                             if st.form_submit_button("댓글 등록") and c_text.strip():
+                                current_display = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
                                 s["comments"].append({
-                                    "writer": f"{leader_name}(조장)",
+                                    "writer": current_display,
                                     "text": c_text
                                 })
                                 save_data(data)
                                 st.rerun()
 
     # 📊 탭 3: 기여도 주식 차트 대시보드
-    with tab3:
+    with tab_mapping["📊 기여도 주식 차트"]:
         st.subheader("📊 실시간 팀플 기여도 지표 (주식형 대시보드)")
         
         if not data.get("stocks") or len(data["stocks"]) == 0:
@@ -414,8 +459,8 @@ else:
                 }).set_index("거래 차수")
                 st.line_chart(chart_df)
 
-    # 📅 탭 4: 달력 일정 관리
-    with tab4:
+    # 📅 탭 4: 달력 일정 관리 (조장은 수정/결재 가능, 조원은 조회만 가능)
+    with tab_mapping["📅 달력 일정 관리"]:
         st.subheader("📅 맞춤형 스케줄러 관리")
         
         start_date = data.get("start_date", datetime.today().date())
@@ -424,34 +469,37 @@ else:
         if isinstance(start_date, str): start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         if isinstance(end_date, str): end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
         
-        # 칼같이 마감기한까지만 리스트 생성
         date_list = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
         date_strs = [str(d) for d in date_list]
         
-        col_reg1, col_reg2, col_reg3 = st.columns([2, 2, 4])
-        with col_reg1:
-            selected_date_str = st.selectbox("날짜 선택", date_strs, key="sel_date")
-        with col_reg2:
-            worker_input = st.selectbox("업무 담당자", m_names if m_names else ["없음"], key="sel_worker")
-        with col_reg3:
-            event_input = st.text_input("할 일 명칭 입력", placeholder="예: 대본 작성, ppt 제작 등", key="sel_content")
-            
-        if st.button("➕ 새로운 업무 등록/추가"):
-            if not event_input.strip():
-                st.error("할 일 명칭을 입력해 주세요.")
-            else:
-                if selected_date_str not in data["calendar_events"] or isinstance(data["calendar_events"][selected_date_str], dict):
-                    data["calendar_events"][selected_date_str] = []
+        # 🔒 조장에게만 새로운 업무 등록 패널 노출
+        if is_leader:
+            col_reg1, col_reg2, col_reg3 = st.columns([2, 2, 4])
+            with col_reg1:
+                selected_date_str = st.selectbox("날짜 선택", date_strs, key="sel_date")
+            with col_reg2:
+                worker_input = st.selectbox("업무 담당자", m_names if m_names else ["없음"], key="sel_worker")
+            with col_reg3:
+                event_input = st.text_input("할 일 명칭 입력", placeholder="예: 대본 작성, ppt 제작 등", key="sel_content")
                 
-                data["calendar_events"][selected_date_str].append({
-                    "id": len(data["calendar_events"][selected_date_str]),
-                    "content": event_input.strip(),
-                    "status": "⏳",
-                    "worker": worker_input
-                })
-                save_data(data)
-                st.success("업무가 리스트에 추가되었습니다!")
-                st.rerun()
+            if st.button("➕ 새로운 업무 등록/추가"):
+                if not event_input.strip():
+                    st.error("할 일 명칭을 입력해 주세요.")
+                else:
+                    if selected_date_str not in data["calendar_events"] or isinstance(data["calendar_events"][selected_date_str], dict):
+                        data["calendar_events"][selected_date_str] = []
+                    
+                    data["calendar_events"][selected_date_str].append({
+                        "id": len(data["calendar_events"][selected_date_str]),
+                        "content": event_input.strip(),
+                        "status": "⏳",
+                        "worker": worker_input
+                    })
+                    save_data(data)
+                    st.success("업무가 리스트에 추가되었습니다!")
+                    st.rerun()
+        else:
+            st.caption("💡 할 일 배정 및 추가 기능은 조장 전용 권한입니다. 조원은 배정된 업무 현황을 열람할 수 있습니다.")
             
         st.write("---")
         st.markdown("#### 📋 최종 업무 결재 리스트")
@@ -470,97 +518,100 @@ else:
                 with c_c: st.write("등록된 일이 없습니다.")
                 with c_s: st.write("-")
             else:
-                # 역순 조회를 통해 pop() 인덱스 꼬임 방지
                 for idx in range(len(day_events) - 1, -1, -1):
                     ev = day_events[idx]
-                    c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 0.8, 2.0])
+                    
+                    # 조장과 조원의 레이아웃 가로 사이즈 유연하게 대응
+                    if is_leader:
+                        c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 0.8, 2.0])
+                    else:
+                        c_d, c_w, c_c, c_s = st.columns([1.5, 1.5, 5.0, 2.0])
                     
                     with c_d: st.write(d_str)
                     with c_w: st.write(f"👤 {ev['worker']}")
                     with c_c: st.write(ev["content"])
                     with c_s: 
-                        if "✔️" in ev["status"]: st.write("✔️ 승인")
-                        elif "❌" in ev["status"]: st.write("❌ 반려")
-                        else: st.write("⏳ 대기")
+                        if "✔️" in ev["status"]: st.write("✔️ 승인됨")
+                        elif "❌" in ev["status"]: st.write("❌ 반려됨")
+                        else: st.write("⏳ 승인대기")
                             
-                    with c_ops:
-                        # 한 줄에 정렬되도록 미니 컬럼 생성
-                        b1, b2, b3 = st.columns(3)
-                        with b1:
-                            if "✔️" not in ev["status"] and st.button("✔️", key=f"v_{d_str}_{idx}_{ev['id']}", help="승인"):
-                                ev["status"] = "✔️"
-                                target_worker = ev["worker"]
-                                if target_worker in data["stocks"]:
-                                    current_p = data["stocks"][target_worker][-1]
-                                    data["stocks"][target_worker].append(current_p + 3000)
-                                    data["stock_logs"][target_worker].append({"type": "plus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 승인"})
-                                save_data(data)
-                                st.rerun()
-                        with b2:
-                            if "❌" not in ev["status"] and st.button("❌", key=f"x_{d_str}_{idx}_{ev['id']}", help="반려"):
-                                ev["status"] = "❌"
-                                target_worker = ev["worker"]
-                                if target_worker in data["stocks"]:
-                                    current_p = data["stocks"][target_worker][-1]
-                                    data["stocks"][target_worker].append(max(1000, current_p - 3000))
-                                    data["stock_logs"][target_worker].append({"type": "minus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 반려"})
-                                save_data(data)
-                                st.rerun()
-                        with b3:
-                            if st.button("🗑️", key=f"del_{d_str}_{idx}_{ev['id']}", help="삭제"):
-                                data["calendar_events"][d_str].pop(idx)
-                                save_data(data)
-                                st.rerun()
+                    # 🔒 승인/반려/휴지통 결재 조작 컨트롤러는 조장에게만 바인딩
+                    if is_leader:
+                        with c_ops:
+                            b1, b2, b3 = st.columns(3)
+                            with b1:
+                                if "✔️" not in ev["status"] and st.button("✔️", key=f"v_{d_str}_{idx}_{ev['id']}", help="승인"):
+                                    ev["status"] = "✔️"
+                                    target_worker = ev["worker"]
+                                    if target_worker in data["stocks"]:
+                                        current_p = data["stocks"][target_worker][-1]
+                                        data["stocks"][target_worker].append(current_p + 3000)
+                                        data["stock_logs"][target_worker].append({"type": "plus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 승인"})
+                                    save_data(data)
+                                    st.rerun()
+                            with b2:
+                                if "❌" not in ev["status"] and st.button("❌", key=f"x_{d_str}_{idx}_{ev['id']}", help="반려"):
+                                    ev["status"] = "❌"
+                                    target_worker = ev["worker"]
+                                    if target_worker in data["stocks"]:
+                                        current_p = data["stocks"][target_worker][-1]
+                                        data["stocks"][target_worker].append(max(1000, current_p - 3000))
+                                        data["stock_logs"][target_worker].append({"type": "minus", "val": 3000, "reason": f"{d_str} [{ev['content']}] 반려"})
+                                    save_data(data)
+                                    st.rerun()
+                            with b3:
+                                if st.button("🗑️", key=f"del_{d_str}_{idx}_{ev['id']}", help="삭제"):
+                                    data["calendar_events"][d_str].pop(idx)
+                                    save_data(data)
+                                    st.rerun()
 
-    # 👥 탭 5: 조원 정보 수정창 (★이름 수정 시 기존 포인트 이전 및 이전 아이디 삭제 로직 적용 완료★)
-    with tab5:
-        st.subheader("👥 조원 명부 관리")
-        st.caption("⚠️ 동명이인이 존재할 시 '이름A', '이름B' 처럼 명확히 구분하여 적어주셔야 지표가 꼬이지 않습니다.")
-        
-        edit_team_name = st.text_input("조 이름 변경", value=data["team_name"])
-        edit_subject = st.text_input("프로젝트 주제 변경", value=data["subject"])
-        if st.button("기본 팀 정보 수정확인"):
-            data["team_name"] = edit_team_name
-            data["subject"] = edit_subject
-            save_data(data)
-            st.success("수정되었습니다.")
-            st.rerun()
+    # 👥 탭 5: 조원 정보 수정창 (★조장 모드일 때만 활성화 정식 처리됨★)
+    if is_leader:
+        with tab_mapping["👥 조원 정보 수정창"]:
+            st.subheader("👥 조원 명부 관리")
+            st.caption("⚠️ 동명이인이 존재할 시 '이름A', '이름B' 처럼 명확히 구분하여 적어주셔야 지표가 꼬이지 않습니다.")
             
-        st.write("---")
-        
-        # 백업용 주식 명단 확보
-        updated_members = []
-        
-        for i in range(len(data["members"])):
-            is_leader_mark = " (👑 조장)" if i == data["leader_idx"] else ""
-            st.markdown(f"#### 👤 조원 {i+1}{is_leader_mark} 정보 관리")
+            edit_team_name = st.text_input("조 이름 변경", value=data["team_name"])
+            edit_subject = st.text_input("프로젝트 주제 변경", value=data["subject"])
+            if st.button("기본 팀 정보 수정확인"):
+                data["team_name"] = edit_team_name
+                data["subject"] = edit_subject
+                save_data(data)
+                st.success("수정되었습니다.")
+                st.rerun()
+                
+            st.write("---")
             
-            old_name = data["members"][i]["이름"]
-            new_name = st.text_input(f"성명", value=old_name, key=f"fixed_n_{i}").strip()
-            fixed_p = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"fixed_p_{i}")
-            fixed_r = st.text_input(f"담당 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
-            
-            updated_members.append({"이름": new_name, "연락처": fixed_p, "역할": fixed_r})
-            
-            # [🔥 핵심 픽스]: 이름이 바뀌었을 때 구 데이터 마이그레이션 후 제거
-            if old_name and new_name and old_name != new_name:
-                if old_name in data["stocks"]:
-                    data["stocks"][new_name] = data["stocks"].pop(old_name)
-                if old_name in data["stock_logs"]:
-                    data["stock_logs"][new_name] = data["stock_logs"].pop(old_name)
-                    
-        if st.button("👥 조원 명단 데이터베이스 동기화 저장"):
-            data["members"] = updated_members
-            for m in data["members"]:
-                if m["이름"] and m["이름"] not in data["stocks"]:
-                    data["stocks"][m["이름"]] = [10000]
-                    data["stock_logs"][m["이름"]] = []
-            save_data(data)
-            st.success("조원 명부와 기여도 인덱스가 깨끗하게 최신화되었습니다!")
-            st.rerun()
+            updated_members = []
+            for i in range(len(data["members"])):
+                is_leader_mark = " (👑 조장)" if i == data["leader_idx"] else ""
+                st.markdown(f"#### 👤 조원 {i+1}{is_leader_mark} 정보 관리")
+                
+                old_name = data["members"][i]["이름"]
+                new_name = st.text_input(f"성명", value=old_name, key=f"fixed_n_{i}").strip()
+                fixed_p = st.text_input(f"연락처", value=data["members"][i]["연락처"], key=f"fixed_p_{i}")
+                fixed_r = st.text_input(f"담당 역할", value=data["members"][i]["역할"], key=f"fixed_r_{i}")
+                
+                updated_members.append({"이름": new_name, "연락처": fixed_p, "역할": fixed_r})
+                
+                if old_name and new_name and old_name != new_name:
+                    if old_name in data["stocks"]:
+                        data["stocks"][new_name] = data["stocks"].pop(old_name)
+                    if old_name in data["stock_logs"]:
+                        data["stock_logs"][new_name] = data["stock_logs"].pop(old_name)
+                        
+            if st.button("👥 조원 명단 데이터베이스 동기화 저장"):
+                data["members"] = updated_members
+                for m in data["members"]:
+                    if m["이름"] and m["이름"] not in data["stocks"]:
+                        data["stocks"][m["이름"]] = [10000]
+                        data["stock_logs"][m["이름"]] = []
+                save_data(data)
+                st.success("조원 명부와 기여도 인덱스가 깨끗하게 최신화되었습니다!")
+                st.rerun()
 
-    # 💬 탭 6: 다중 대상 DM방 탭
-    with tab6:
+    # 💬 탭 6: 다중 대상 DM방 탭 (조장/조원 누구나 다중 전송 가능)
+    with tab_mapping["💬 다중 대상 DM방"]:
         st.subheader("💬 다중 대상 동시 전송 DM 채널")
         chat_box = st.container(height=300)
         with chat_box:
@@ -569,12 +620,19 @@ else:
                 st.info(c["msg"])
                 
         with st.form("multi_dm_form", clear_on_submit=True):
-            selected_receivers = st.multiselect("수신자 선택", m_names, default=m_names)
+            # 조원 리스트 구축 (자신 제외 타 조원 및 조장 포함 목적)
+            all_target_names = list(m_names)
+            if leader_name not in all_target_names:
+                all_target_names.append(leader_name)
+                
+            selected_receivers = st.multiselect("수신자 선택", all_target_names, default=all_target_names)
             dm_msg = st.text_input("DM 메시지 내용 작성")
+            
             if st.form_submit_button("🚀 DM 발송") and dm_msg.strip():
                 if selected_receivers:
+                    sender_display = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
                     data["chats"].append({
-                        "sender": f"{leader_name}(조장)",
+                        "sender": sender_display,
                         "receivers": ", ".join(selected_receivers),
                         "msg": dm_msg,
                         "time": datetime.now().strftime("%H:%M")
