@@ -29,12 +29,16 @@ supabase = get_supabase_client()
 # 컬럼: id (text, primary key), data (jsonb)
 # 딱 하나의 row (id='main')에 전체 데이터를 JSON으로 저장
 
+# 관리자 계정은 Streamlit Secrets에서 불러옴 (코드에 직접 노출 금지)
+ADMIN_ID = st.secrets["admin"]["id"]
+ADMIN_PW = st.secrets["admin"]["pw"]
+
 DEFAULT_DB = {
     "users_master": {},
     "teams_master": {},
     "admin_master": {
-        "admin_id": "root_manager_star",
-        "admin_pw": "StarTree#Admin99!!",
+        "admin_id": ADMIN_ID,
+        "admin_pw": ADMIN_PW,
         "system_notices": [],
         "bug_reports": []
     }
