@@ -1,0 +1,10 @@
+# Secrets - 절대 깃허브에 올리면 안 됨!
+.streamlit/secrets.toml
+
+# 기존 pickle DB 파일
+*.pkl
+
+# Python
+__pycache__/
+*.pyc
+.env
