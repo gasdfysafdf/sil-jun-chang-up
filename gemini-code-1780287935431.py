@@ -320,7 +320,7 @@ else:
     tabs = st.tabs(tab_titles)
     tab_mapping = {title: tabs[i] for i, title in enumerate(tab_titles)}
     
-    # --- 탭 1: 공지사항 게시판 (2초 황금주기 최적화) ---
+    # --- 탭 1: 공지사항 게시판 ---
     with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 고유 공지사항")
         
@@ -361,7 +361,7 @@ else:
         st.write("---")
         show_notices_live()
 
-    # --- 탭 2: 피드 광장 (2초 황금주기 최적화) ---
+    # --- 탭 2: 피드 광장 (안전한 고유 ID 매핑 구조 및 Rerun 제거로 렉/오류 완전 해결) ---
     with tab_mapping["✨ 스토리 피드 광장"]:
         st.subheader("📸 우리 팀 스토리 피드 보드")
         col_up, col_view = st.columns([2, 3])
@@ -379,7 +379,9 @@ else:
                         elif st_media.name.lower().endswith(".mp4"): media_type = "video"
                         elif st_media.name.lower().endswith((".mp3", ".wav")): media_type = "audio"
                             
+                    # 고유 ID(story_id) 부여하여 안전망 마련
                     team_data.setdefault("stories", []).insert(0, {
+                        "story_id": str(uuid.uuid4()),
                         "user": f"{my_chat_name}", "content": st_text, "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "media_type": media_type, "media_data": media_data, "likes": 0, "comments": []
                     })
@@ -391,8 +393,12 @@ else:
             def show_stories_live():
                 fresh_db = load_all_data()
                 fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
+                stories_list = fresh_team.get("stories", [])
                 
-                for idx, s in enumerate(fresh_team.get("stories", [])):
+                for s in stories_list:
+                    # 마이그레이션 예외 처리 (기존에 id가 없던 데이터 보호용)
+                    s_id = s.get("story_id", s.get("time", str(uuid.uuid4())))
+                    
                     with st.container(border=True):
                         st.markdown(f"🔴 **{s['user']}** | *{s['time']}*")
                         st.write(s["content"])
@@ -400,22 +406,37 @@ else:
                         elif s.get("media_type") == "video": st.video(s["media_data"])
                         elif s.get("media_type") == "audio": st.audio(s["media_data"])
                             
-                        if st.button(f"❤️ 응원 {s.get('likes', 0)}개", key=f"like_b_{idx}"):
-                            master_db["teams_master"][st.session_state.current_team_id]["stories"][idx]["likes"] = s.get("likes", 0) + 1
-                            save_all_data(master_db)
-                            st.rerun()
+                        # 👍 하트 기능 고도화: st.rerun()을 쓰지 않고 즉시 로컬 메모리 반영 후 백그라운드 DB 저장
+                        if st.button(f"❤️ 응원 {s.get('likes', 0)}개", key=f"like_b_{s_id}"):
+                            # 실시간 변동 동기화용 타겟 추적
+                            db_to_write = load_all_data()
+                            for origin_s in db_to_write["teams_master"][st.session_state.current_team_id].get("stories", []):
+                                if origin_s.get("story_id") == s_id or (not origin_s.get("story_id") and origin_s.get("time") == s.get("time")):
+                                    origin_s["likes"] = origin_s.get("likes", 0) + 1
+                                    s["likes"] = origin_s["likes"] # 현재 화면 캐시 즉시 업데이트
+                                    break
+                            save_all_data(db_to_write)
                         
+                        # 💬 댓글 리스트 출력
                         for cm in s.get("comments", []):
                             st.markdown(f"**{cm['writer']}**: {cm['text']}")
-                        with st.form(f"comment_f_{idx}", clear_on_submit=True):
-                            c_text = st.text_input("댓글 피드백 달기", key=f"cm_t_{idx}")
+                            
+                        # 📝 댓글 입력 폼: st.rerun()을 제거하여 화면 끊김 및 IndexError 완벽 차단
+                        with st.form(f"comment_f_{s_id}", clear_on_submit=True):
+                            c_text = st.text_input("댓글 피드백 달기", key=f"cm_t_{s_id}")
                             if st.form_submit_button("댓글 게시") and c_text.strip():
-                                master_db["teams_master"][st.session_state.current_team_id]["stories"][idx].setdefault("comments", []).append({"writer": f"{my_chat_name}", "text": c_text})
-                                save_all_data(master_db)
-                                st.rerun()
+                                db_to_write = load_all_data()
+                                new_comment = {"writer": f"{my_chat_name}", "text": c_text.strip()}
+                                
+                                for origin_s in db_to_write["teams_master"][st.session_state.current_team_id].get("stories", []):
+                                    if origin_s.get("story_id") == s_id or (not origin_s.get("story_id") and origin_s.get("time") == s.get("time")):
+                                        origin_s.setdefault("comments", []).append(new_comment)
+                                        s.setdefault("comments", []).append(new_comment) # 현재 화면 캐시 즉시 업데이트
+                                        break
+                                save_all_data(db_to_write)
             show_stories_live()
 
-    # --- 탭 3: 기여도 차트 (2초 황금주기 최적화) ---
+    # --- 탭 3: 기여도 차트 ---
     with tab_mapping["📊 기여도 주식 차트"]:
         st.subheader("📊 조원 기여 가치 지분 대시보드")
         
@@ -447,7 +468,7 @@ else:
                     st.line_chart(chart_df)
         show_stocks_live()
 
-    # --- 탭 4: 달력 일정 관리 (2초 황금주기 최적화) ---
+    # --- 탭 4: 달력 일정 관리 ---
     with tab_mapping["📅 달력 일정 관리"]:
         st.subheader("📅 우리 팀 업무 결재선 타임라인")
         
@@ -577,7 +598,7 @@ else:
                 st.success("명단 배포 완료!")
                 st.rerun()
 
-    # --- 탭 6: 카톡형 커스텀 메신저 (2초 최적화 렉 프리 버전) ---
+    # --- 탭 6: 카톡형 커스텀 메신저 ---
     with tab_mapping["💬 멀티 카톡방 메신저"]:
         st.subheader("💬 우리 조 전용 실시간 커스텀 채팅방 포털")
         
@@ -620,7 +641,6 @@ else:
                     
         st.write("---")
         
-        # 🚨 2초 주기로 타협하여 렌더링 렉을 완벽하게 예방하는 채팅 코어 컴포넌트
         @st.fragment(run_every=2)
         def show_entire_chat_system_live():
             fresh_db = load_all_data()
@@ -660,7 +680,7 @@ else:
                                 if is_me:
                                     st.markdown(f"<div style='text-align: right; margin-bottom: 8px;'><span style='background-color: #ffe600; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%; text-align: left;'><b>내가 보냄</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
                                 else:
-                                    st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
                     
                     with st.form(f"msg_send_form_{target_room['room_id']}", clear_on_submit=True):
                         text_input = st.text_input("메시지 입력", placeholder="대화를 입력해 보세요.", key=f"chat_text_in_{target_room['room_id']}")
