@@ -1,47 +1,71 @@
 import streamlit as st
 import pandas as pd
 import os
-import pickle
 import uuid
+import json
 from datetime import datetime, timedelta
+from supabase import create_client, Client
 
 st.set_page_config(page_title="스타트리 (Startree) - 마스터 통합본", page_icon="🌳", layout="wide")
 
-DB_FILE = "startree_multi_team_db.pkl"
+# --- [Supabase 연결] ---
+# Streamlit Cloud의 경우 .streamlit/secrets.toml에 설정
+# 로컬의 경우 .streamlit/secrets.toml 파일을 만들어서 아래 형식으로 입력:
+#
+# [supabase]
+# url = "https://xxxxxx.supabase.co"
+# key = "your-anon-key"
 
-# --- [멀티팀 & 관리자 데이터베이스 엔진] ---
-def load_all_data():
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "rb") as f:
-                db = pickle.load(f)
-                # 하위 호환성 및 신규 관리자 스토리지 확장 보정
-                if "admin_master" not in db:
-                    db["admin_master"] = {
-                        "admin_id": "root_manager_star",
-                        "admin_pw": "StarTree#Admin99!!",
-                        "system_notices": [],
-                        "bug_reports": []
-                    }
-                return db
-        except Exception:
-            pass
-            
-    # 최초 실행 시 초기 구조 생성 및 마스터 계정 안전 인서트
-    return {
-        "users_master": {},  
-        "teams_master": {},
-        "admin_master": {
-            "admin_id": "root_manager_star",
-            "admin_pw": "StarTree#Admin99!!",
-            "system_notices": [],
-            "bug_reports": []
-        }
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase = get_supabase_client()
+
+# --- [멀티팀 & 관리자 데이터베이스 엔진 - Supabase 버전] ---
+# Supabase에 'startree_db' 테이블 하나만 사용
+# 컬럼: id (text, primary key), data (jsonb)
+# 딱 하나의 row (id='main')에 전체 데이터를 JSON으로 저장
+
+DEFAULT_DB = {
+    "users_master": {},
+    "teams_master": {},
+    "admin_master": {
+        "admin_id": "root_manager_star",
+        "admin_pw": "StarTree#Admin99!!",
+        "system_notices": [],
+        "bug_reports": []
     }
+}
+
+def load_all_data():
+    try:
+        res = supabase.table("startree_db").select("data").eq("id", "main").execute()
+        if res.data and len(res.data) > 0:
+            db = res.data[0]["data"]
+            # 하위 호환성 보정
+            if "admin_master" not in db:
+                db["admin_master"] = DEFAULT_DB["admin_master"].copy()
+            if "users_master" not in db:
+                db["users_master"] = {}
+            if "teams_master" not in db:
+                db["teams_master"] = {}
+            return db
+        else:
+            # 최초 실행: row 생성
+            supabase.table("startree_db").insert({"id": "main", "data": DEFAULT_DB}).execute()
+            return DEFAULT_DB.copy()
+    except Exception as e:
+        st.error(f"DB 연결 오류: {e}")
+        return DEFAULT_DB.copy()
 
 def save_all_data(master_db):
-    with open(DB_FILE, "wb") as f:
-        pickle.dump(master_db, f)
+    try:
+        supabase.table("startree_db").upsert({"id": "main", "data": master_db}).execute()
+    except Exception as e:
+        st.error(f"DB 저장 오류: {e}")
 
 master_db = load_all_data()
 
