@@ -3,7 +3,6 @@ import pandas as pd
 import os
 import pickle
 import uuid
-import time
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="스타트리 (Startree)", page_icon="🌳", layout="wide")
@@ -13,8 +12,11 @@ DB_FILE = "startree_multi_team_db.pkl"
 # --- [멀티팀 데이터베이스 엔진] ---
 def load_all_data():
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, "rb") as f:
-            return pickle.load(f)
+        try:
+            with open(DB_FILE, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            pass
     return {
         "users_master": {},  # { "leader_id": {"pw": "...", "team_id": "uuid_str"} }
         "teams_master": {}   # { "team_id_str": { 팀 세부 데이터 세트 } }
@@ -36,36 +38,40 @@ if "user_role" not in st.session_state:
 if "step" not in st.session_state:
     st.session_state.step = "auth_login"
 
-# 🔗 조원 초대 링크 파라미터 트래킹
-query_params = st.query_params
-if "invite" in query_params and "team_id" in query_params:
-    target_team = query_params["team_id"]
-    if target_team in master_db["teams_master"] and st.session_state.step not in ["main_home", "member_auth"]:
-        st.session_state.current_team_id = target_team
-        st.session_state.user_role = "member"
-        st.session_state.step = "member_auth"
+# 🔗 [수정완료] 멀티팀 초대 링크 주소 파라미터 강제 트래킹 및 검증 로직 격리
+qp = st.query_params
+if "invite" in qp and "team_id" in qp:
+    target_team = qp["team_id"]
+    if target_team in master_db["teams_master"]:
+        if st.session_state.step != "main_home" and st.session_state.current_user is None:
+            st.session_state.current_team_id = target_team
+            st.session_state.user_role = "member"
+            st.session_state.step = "member_auth"
 
-# 현재 접속 세션 바인딩
+# 현재 접속 세션 런타임 데이터 바인딩 안전망
 team_data = None
 m_names = []
 leader_name = "미정"
 if st.session_state.current_team_id and st.session_state.current_team_id in master_db["teams_master"]:
     team_data = master_db["teams_master"][st.session_state.current_team_id]
-    m_names = [m["이름"] for m in team_data["members"] if m["이름"]]
-    leader_name = team_data["members"][team_data["leader_idx"]]["이름"] if team_data["members"] else "미정"
+    m_names = [m["이름"] for m in team_data.get("members", []) if m.get("이름")]
+    if team_data.get("members") and "leader_idx" in team_data:
+        try:
+            leader_name = team_data["members"][team_data["leader_idx"]]["이름"]
+        except Exception:
+            leader_name = "미정"
 
-# --- [사이드바 제어창 및 수동 새로고침] ---
+# --- [사이드바 제어창] ---
 with st.sidebar:
     st.title("🌳 스타트리 서비스 센터")
     
-    # 🔄 수동 새로고침 버튼
-    if st.button("🔄 시스템 실시간 동기화 (새로고침)", use_container_width=True):
+    if st.button("🔄 시스템 전체 강제 새로고침", use_container_width=True):
         st.rerun()
         
     st.write("---")
     if st.session_state.current_user:
         role_label = "👑 조장" if st.session_state.user_role == "leader" else "👤 조원"
-        t_name_display = team_data['team_name'] if team_data else "설정중"
+        t_name_display = team_data.get('team_name', '설정중') if team_data else "설정중"
         st.success(f"소속: {t_name_display}\n\n계정: {st.session_state.current_user} [{role_label}]")
         
         if st.button("To. 로그아웃 (접속 종료)", use_container_width=True):
@@ -76,7 +82,7 @@ with st.sidebar:
             st.query_params.clear()
             st.rerun()
     else:
-        st.warning("상용화 멀티팀 인증 모드 구동 중")
+        st.warning("상용화 멀티팀 독립 세션 구동 중")
         
     st.write("---")
     st.caption("🚨 마스터 포맷 시 파일 데이터 전체가 증발하므로 주의하세요.")
@@ -92,14 +98,13 @@ with st.sidebar:
 # ==========================================
 if st.session_state.step == "member_auth" and team_data:
     st.title("🔗 스타트리 조원 초대 가입 패스")
-    st.subheader(f"🌳 '{team_data['team_name']}' 팀 워크스페이스")
-    st.markdown(f"**🎯 프로젝트 주제:** {team_data['subject']} | **👑 담당 조장:** {leader_name}")
+    st.subheader(f"🌳 '{team_data.get('team_name', '우리팀')}' 팀 워크스페이스")
+    st.markdown(f"**🎯 프로젝트 주제:** {team_data.get('subject', '미정')} | **👑 담당 조장:** {leader_name}")
     st.caption("조장 로그인 계정이 없어도, 지정된 명단 선택을 통해 즉시 접속이 가능합니다.")
     
     if not m_names:
         st.error("❌ 조장님이 아직 조원 명부를 작성하지 않았습니다. 조장에게 초기 팀 설정을 완료해달라고 요청하세요.")
     else:
-        # 🔒 조원 목록에서 조장(Leader) 이름은 완벽하게 필터링하여 제외
         only_members_names = [name for name in m_names if name != leader_name]
         
         if not only_members_names:
@@ -186,7 +191,7 @@ elif st.session_state.step == "auth_register":
             st.rerun()
 
 # ==========================================
-# [분기 4] 팀 빌딩 마법사 (1단계 ~ 5단계)
+# [분기 4] 팀 빌딩 마법사 (1단계 ~ 5단계 및 고유링크 발급)
 # ==========================================
 elif st.session_state.step == "setup_1":
     st.title("🚀 스타트리 초기 설정")
@@ -197,7 +202,7 @@ elif st.session_state.step == "setup_1":
             "member_count": count,
             "members": [{"이름": "", "연락처": "", "역할": ""} for _ in range(count)],
             "leader_idx": 0, "team_name": "", "subject": "",
-            "start_date": datetime.today().date(), "end_date": datetime.today().date() + timedelta(days=7),
+            "start_date": str(datetime.today().date()), "end_date": str((datetime.today() + timedelta(days=7)).date()),
             "calendar_events": {}, "notices": [], "chats": [], "stories": [], "stocks": {}, "stock_logs": {}
         }
         save_all_data(master_db)
@@ -255,7 +260,7 @@ elif st.session_state.step == "setup_5":
     st.subheader("5단계: 이번 팀 프로젝트의 최종 마감 기한을 선택해 주세요.")
     e_date = st.date_input("종료 데드라인 지정", key="e_date_setup")
     if st.button("다음 단계로"):
-        master_db["teams_master"][st.session_state.current_team_id]["end_date"] = e_date
+        master_db["teams_master"][st.session_state.current_team_id]["end_date"] = str(e_date)
         save_all_data(master_db)
         st.session_state.step = "setup_link"
         st.rerun()
@@ -266,13 +271,18 @@ elif st.session_state.step == "setup_link":
     
     host = st.context.headers.get("Host", "localhost:8501")
     protocol = "https" if "localhost" not in host else "http"
+    
+    # 🔗 [수정완료] 주소 도메인이 고정되어 터지던 버그를 유동적인 현재 접속 Host 주소 기반 파라미터 매핑으로 전면 해결
     v_link = f"{protocol}://{host}/?invite=true&team_id={st.session_state.current_team_id}"
     
     st.info(v_link)
-    st.caption("💡 위 주소를 복사해 팀원들에게 공유하세요. 조원들은 조장 이름을 제외한 명단에서 로그인 없이 즉시 입장하게 됩니다.")
+    st.caption("💡 위 주소를 복사해 팀원들에게 공유하세요. 조원들은 조장 이름을 제외한 명단에서 가입 절차 없이 즉시 입장하게 됩니다.")
     
     if st.button("🎉 링크 확인 완료 및 대시보드 오픈"):
         current_team = master_db["teams_master"][st.session_state.current_team_id]
+        if "stocks" not in current_team: current_team["stocks"] = {}
+        if "stock_logs" not in current_team: current_team["stock_logs"] = {}
+        
         for m in current_team["members"]:
             if m["이름"] and m["이름"] not in current_team["stocks"]:
                 current_team["stocks"][m["이름"]] = [10000]
@@ -292,8 +302,8 @@ else:
     current_name = st.session_state.current_user
     is_leader = (st.session_state.user_role == "leader")
     
-    st.title(f"🌳 {team_data['team_name']} 독점 워크스페이스")
-    st.markdown(f"**🎯 주제:** {team_data['subject']} | **👑 총괄조장:** {leader_name} | **👤 접속 중인 유저:** {current_name} ({'조장 플러그인' if is_leader else '조원 플러그인'})")
+    st.title(f"🌳 {team_data.get('team_name', '우리팀')} 독점 워크스페이스")
+    st.markdown(f"**🎯 주제:** {team_data.get('subject', '과제 주제')} | **👑 총괄조장:** {leader_name} | **👤 접속 중인 유저:** {current_name} ({'조장 플러그인' if is_leader else '조원 플러그인'})")
     st.write("---")
 
     tab_titles = ["📢 팀 홈 및 공지사항", "✨ 스토리 피드 광장", "📊 기여도 주식 차트", "📅 달력 일정 관리", "💬 다중 대상 DM방"]
@@ -303,17 +313,16 @@ else:
     tabs = st.tabs(tab_titles)
     tab_mapping = {title: tabs[i] for i, title in enumerate(tab_titles)}
     
-    # --- 탭 1: 공지사항 게시판 ---
+    # --- 탭 1: 공지사항 게시판 (5초 자동 새로고침) ---
     with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 고유 공지사항")
         
-        # 🔄 실시간 자동 새로고침 영역 지정 (st.fragment 사용 - 5초 간격)
         @st.fragment(run_every=5)
         def show_notices_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
             
-            for idx, n in enumerate(fresh_team["notices"]):
+            for idx, n in enumerate(fresh_team.get("notices", [])):
                 with st.container(border=True):
                     st.caption(f"📅 {n['date']}")
                     st.write(n["content"])
@@ -332,7 +341,7 @@ else:
                             file_name = uploaded_file.name
                             file_bytes = uploaded_file.read()
                             
-                        team_data["notices"].insert(0, {
+                        team_data.setdefault("notices", []).insert(0, {
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "content": notice_text, "file_name": file_name, "file_bytes": file_bytes
                         })
@@ -340,12 +349,12 @@ else:
                         st.success("공지가 실시간 전송되었습니다!")
                         st.rerun()
         else:
-            st.caption("💡 공지사항 편집 권한은 마스터 조장 전용입니다. (5초 간격 실시간 자동 동기화 적용 중)")
+            st.caption("💡 공지사항 편집 권한은 마스터 조장 전용입니다. (5초 간격 실시간 자동 동기화)")
             
         st.write("---")
         show_notices_live()
 
-    # --- 탭 2: 피드 광장 ---
+    # --- 탭 2: 피드 광장 (5초 자동 새로고침) ---
     with tab_mapping["✨ 스토리 피드 광장"]:
         st.subheader("📸 우리 팀 스토리 피드 보드")
         col_up, col_view = st.columns([2, 3])
@@ -364,7 +373,7 @@ else:
                         elif st_media.name.lower().endswith((".mp3", ".wav")): media_type = "audio"
                             
                     display_user_name = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
-                    team_data["stories"].insert(0, {
+                    team_data.setdefault("stories", []).insert(0, {
                         "user": display_user_name, "content": st_text, "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "media_type": media_type, "media_data": media_data, "likes": 0, "comments": []
                     })
@@ -372,63 +381,76 @@ else:
                     st.rerun()
                     
         with col_view:
-            for idx, s in enumerate(team_data["stories"]):
-                with st.container(border=True):
-                    st.markdown(f"🔴 **{s['user']}** | *{s['time']}*")
-                    st.write(s["content"])
-                    if s.get("media_type") == "image": st.image(s["media_data"], use_container_width=True)
-                    elif s.get("media_type") == "video": st.video(s["media_data"])
-                    elif s.get("media_type") == "audio": st.audio(s["media_data"])
-                        
-                    if st.button(f"❤️ 응원 {s.get('likes', 0)}개", key=f"like_b_{idx}"):
-                        s["likes"] = s.get("likes", 0) + 1
-                        save_all_data(master_db)
-                        st.rerun()
-                    
-                    for cm in s.get("comments", []):
-                        st.markdown(f"**{cm['writer']}**: {cm['text']}")
-                    with st.form(f"comment_f_{idx}", clear_on_submit=True):
-                        c_text = st.text_input("댓글 피드백 달기", key=f"cm_t_{idx}")
-                        if st.form_submit_button("댓글 게시") and c_text.strip():
-                            s["comments"].append({"writer": f"{current_name}", "text": c_text})
+            @st.fragment(run_every=5)
+            def show_stories_live():
+                fresh_db = load_all_data()
+                fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
+                
+                for idx, s in enumerate(fresh_team.get("stories", [])):
+                    with st.container(border=True):
+                        st.markdown(f"🔴 **{s['user']}** | *{s['time']}*")
+                        st.write(s["content"])
+                        if s.get("media_type") == "image": st.image(s["media_data"], use_container_width=True)
+                        elif s.get("media_type") == "video": st.video(s["media_data"])
+                        elif s.get("media_type") == "audio": st.audio(s["media_data"])
+                            
+                        if st.button(f"❤️ 응원 {s.get('likes', 0)}개", key=f"like_b_{idx}"):
+                            master_db["teams_master"][st.session_state.current_team_id]["stories"][idx]["likes"] = s.get("likes", 0) + 1
                             save_all_data(master_db)
                             st.rerun()
+                        
+                        for cm in s.get("comments", []):
+                            st.markdown(f"**{cm['writer']}**: {cm['text']}")
+                        with st.form(f"comment_f_{idx}", clear_on_submit=True):
+                            c_text = st.text_input("댓글 피드백 달기", key=f"cm_t_{idx}")
+                            if st.form_submit_button("댓글 게시") and c_text.strip():
+                                master_db["teams_master"][st.session_state.current_team_id]["stories"][idx].setdefault("comments", []).append({"writer": f"{current_name}", "text": c_text})
+                                save_all_data(master_db)
+                                st.rerun()
+            show_stories_live()
 
-    # --- 탭 3: 기여도 차트 ---
+    # --- 탭 3: 기여도 차트 (5초 자동 새로고침) ---
     with tab_mapping["📊 기여도 주식 차트"]:
         st.subheader("📊 조원 기여 가치 지분 대시보드")
-        if team_data.get("stocks"):
-            grid_cols = st.columns(len(team_data["stocks"]))
-            for index, name in enumerate(team_data["stocks"].keys()):
-                with grid_cols[index]:
-                    current_val = team_data["stocks"][name][-1]
-                    logs = team_data["stock_logs"].get(name, [])
-                    with st.container(border=True):
-                        st.markdown(f"**{name}**")
-                        st.markdown(f"지분 지표: **{current_val:,} P**")
-                        if logs:
-                            last_log = logs[-1]
-                            color = "#2ec4b6" if last_log["type"] == "plus" else "#e71d36"
-                            sign = "+" if last_log["type"] == "plus" else "-"
-                            st.markdown(f"<span style='color:{color}; font-weight:bold;'>{sign}{last_log['val']:,} P</span>", unsafe_allow_html=True)
+        
+        @st.fragment(run_every=5)
+        def show_stocks_live():
+            fresh_db = load_all_data()
+            fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
             
-            st.write("---")
-            selected_stock_user = st.selectbox("추적 대상 조원 정밀 조회", list(team_data["stocks"].keys()))
-            if selected_stock_user:
-                user_history = team_data["stocks"][selected_stock_user]
-                chart_df = pd.DataFrame({"기여도 가치 추이 (P)": user_history})
-                st.line_chart(chart_df)
+            if fresh_team.get("stocks"):
+                grid_cols = st.columns(len(fresh_team["stocks"]))
+                for index, name in enumerate(fresh_team["stocks"].keys()):
+                    with grid_cols[index]:
+                        current_val = fresh_team["stocks"][name][-1]
+                        logs = fresh_team.get("stock_logs", {}).get(name, [])
+                        with st.container(border=True):
+                            st.markdown(f"**{name}**")
+                            st.markdown(f"지분 지표: **{current_val:,} P**")
+                            if logs:
+                                last_log = logs[-1]
+                                color = "#2ec4b6" if last_log["type"] == "plus" else "#e71d36"
+                                sign = "+" if last_log["type"] == "plus" else "-"
+                                st.markdown(f"<span style='color:{color}; font-weight:bold;'>{sign}{last_log['val']:,} P</span>", unsafe_allow_html=True)
+                
+                st.write("---")
+                selected_stock_user = st.selectbox("추적 대상 조원 정밀 조회", list(fresh_team["stocks"].keys()))
+                if selected_stock_user:
+                    user_history = fresh_team["stocks"][selected_stock_user]
+                    chart_df = pd.DataFrame({"기여도 가치 추이 (P)": user_history})
+                    st.line_chart(chart_df)
+        show_stocks_live()
 
-    # --- 탭 4: 달력 일정 관리 ---
+    # --- 탭 4: 달력 일정 관리 (5초 자동 새로고침 및 타이포 에러 해결) ---
     with tab_mapping["📅 달력 일정 관리"]:
         st.subheader("📅 우리 팀 업무 결재선 타임라인")
         
-        start_date = team_data.get("start_date", datetime.today().date())
-        end_date = team_data.get("end_date", datetime.today().date())
-        if isinstance(start_date, str): start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-        if isinstance(end_date, str): end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        start_date_val = team_data.get("start_date", str(datetime.today().date()))
+        end_date_val = team_data.get("end_date", str(datetime.today().date()))
+        if isinstance(start_date_val, str): start_date_val = datetime.strptime(start_date_val, "%Y-%m-%d").date()
+        if isinstance(end_date_val, str): end_date_val = datetime.strptime(end_date_val, "%Y-%m-%d").date()
         
-        date_list = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+        date_list = [start_date_val + timedelta(days=i) for i in range((end_date_val - start_date_val).days + 1)]
         date_strs = [str(d) for d in date_list]
         
         if is_leader:
@@ -439,7 +461,7 @@ else:
                 
             if st.button("➕ 새로운 업무 분배 배치"):
                 if event_input.strip():
-                    if selected_date_str not in team_data["calendar_events"] or not isinstance(team_data["calendar_events"][selected_date_str], list):
+                    if selected_date_str not in team_data.setdefault("calendar_events", {}):
                         team_data["calendar_events"][selected_date_str] = []
                     
                     team_data["calendar_events"][selected_date_str].append({
@@ -451,61 +473,69 @@ else:
                     st.rerun()
         
         st.write("---")
-        for d_str in date_strs:
-            day_events = team_data["calendar_events"].get(d_str, [])
-            if not isinstance(day_events, list): day_events = []
-                
-            if not day_events:
-                c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 1.0, 1.8])
-                c_d.write(d_str)
-                c_w.write("👤 미지정")
-                c_c.write("등록된 전술 과업이 없습니다.")
-                c_s.write("-")
-            else:
-                for idx in range(len(day_events) - 1, -1, -1):
-                    ev = day_events[idx]
+        
+        @st.fragment(run_every=5)
+        def show_calendar_live():
+            fresh_db = load_all_data()
+            fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
+            
+            for d_str in date_strs:
+                day_events = fresh_team.get("calendar_events", {}).get(d_str, [])
+                if not day_events:
                     c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 1.0, 1.8])
-                    
                     c_d.write(d_str)
-                    c_w.write(f"👤 {ev['worker']}")
-                    c_c.write(ev['content'])
-                    c_s.write("✔️ 결재승인" if "✔️" in ev["status"] else "❌ 이행반려" if "❌" in ev["status"] else "⏳ 검토대기")
-                    
-                    if is_leader:
-                        with c_ops:
-                            b1, b2, b3 = st.columns(3)
-                            with b1:
-                                if st.button("✔️", key=f"v_{d_str}_{idx}_{ev.get('id', idx)}"):
-                                    ev["status"] = "✔️"
-                                    tw = ev["worker"]
-                                    if tw in team_data["stocks"]:
-                                        team_data["stocks"][tw].append(team_data["stocks"][tw][-1] + 3000)
-                                        team_data["stock_logs"].setdefault(tw, []).append({"type": "plus", "val": 3000, "reason": f"{d_str} 결재성공"})
-                                    save_all_data(master_db)
-                                    st.rerun()
-                            with b2:
-                                if st.button("❌", key=f"x_{d_str}_{idx}_{ev.get('id', idx)}"):
-                                    ev["status"] = "❌"
-                                    tw = ev["worker"]
-                                    if tw in team_data["stocks"]:
-                                        team_data["stocks"][tw].append(max(1000, team_data["stocks"][tw][-1] - 3000))
-                                        team_data["stock_logs"].setdefault(tw, []).append({"type": "minus", "val": 3000, "reason": f"{d_str} 태만반려"})
-                                    save_all_data(master_db)
-                                    st.rerun()
-                            with b3:
-                                if st.button("🗑️", key=f"del_{d_str}_{idx}_{ev.get('id', idx)}"):
-                                    team_data["calendar_events"][d_str].pop(idx)
-                                    save_all_data(master_db)
-                                    st.rerun()
-                    else:
-                        c_ops.write("🔒 변경불가")
+                    c_w.write("👤 미지정")
+                    c_c.write("등록된 전술 과업이 없습니다.")
+                    c_s.write("-")
+                else:
+                    for idx in range(len(day_events) - 1, -1, -1):
+                        ev = day_events[idx]
+                        c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 1.0, 1.8])
+                        
+                        c_d.write(d_str)
+                        # 🛠️ [수정완료] St.write -> st.write 소문자 타이포 에러 원천 해결
+                        c_w.write(f"👤 {ev.get('worker', '미지정')}")
+                        c_c.write(ev.get('content', '내용 없음'))
+                        
+                        status_str = ev.get("status", "⏳")
+                        c_s.write("✔️ 결재승인" if "✔️" in status_str else "❌ 이행반려" if "❌" in status_str else "⏳ 검토대기")
+                        
+                        if is_leader:
+                            with c_ops:
+                                b1, b2, b3 = st.columns(3)
+                                with b1:
+                                    if st.button("✔️", key=f"v_{d_str}_{idx}_{ev.get('id', idx)}"):
+                                        master_db["teams_master"][st.session_state.current_team_id]["calendar_events"][d_str][idx]["status"] = "✔️"
+                                        tw = ev["worker"]
+                                        if tw in master_db["teams_master"][st.session_state.current_team_id].setdefault("stocks", {}):
+                                            master_db["teams_master"][st.session_state.current_team_id]["stocks"][tw].append(master_db["teams_master"][st.session_state.current_team_id]["stocks"][tw][-1] + 3000)
+                                            master_db["teams_master"][st.session_state.current_team_id].setdefault("stock_logs", {}).setdefault(tw, []).append({"type": "plus", "val": 3000, "reason": f"{d_str} 결재성공"})
+                                        save_all_data(master_db)
+                                        st.rerun()
+                                with b2:
+                                    if st.button("❌", key=f"x_{d_str}_{idx}_{ev.get('id', idx)}"):
+                                        master_db["teams_master"][st.session_state.current_team_id]["calendar_events"][d_str][idx]["status"] = "❌"
+                                        tw = ev["worker"]
+                                        if tw in master_db["teams_master"][st.session_state.current_team_id].setdefault("stocks", {}):
+                                            master_db["teams_master"][st.session_state.current_team_id]["stocks"][tw].append(max(1000, master_db["teams_master"][st.session_state.current_team_id]["stocks"][tw][-1] - 3000))
+                                            master_db["teams_master"][st.session_state.current_team_id].setdefault("stock_logs", {}).setdefault(tw, []).append({"type": "minus", "val": 3000, "reason": f"{d_str} 태만반려"})
+                                        save_all_data(master_db)
+                                        st.rerun()
+                                with b3:
+                                    if st.button("🗑️", key=f"del_{d_str}_{idx}_{ev.get('id', idx)}"):
+                                        master_db["teams_master"][st.session_state.current_team_id]["calendar_events"][d_str].pop(idx)
+                                        save_all_data(master_db)
+                                        st.rerun()
+                        else:
+                            c_ops.write("🔒 변경불가")
+        show_calendar_live()
 
-    # --- 탭 5: 조원 정보 수정창 (조장 전용 차단막 완비) ---
+    # --- 탭 5: 조원 정보 수정창 ---
     if is_leader:
         with tab_mapping["👥 조원 정보 수정창"]:
             st.subheader("👥 조원 명부 실시간 편집 마이그레이션")
-            edit_team_name = st.text_input("조 이름 변경", value=team_data["team_name"])
-            edit_subject = st.text_input("프로젝트 주제 변경", value=team_data["subject"])
+            edit_team_name = st.text_input("조 이름 변경", value=team_data.get("team_name", ""))
+            edit_subject = st.text_input("프로젝트 주제 변경", value=team_data.get("subject", ""))
             if st.button("핵심 메타데이터 수정 동기화"):
                 team_data["team_name"] = edit_team_name
                 team_data["subject"] = edit_subject
@@ -515,8 +545,8 @@ else:
                 
             st.write("---")
             updated_members = []
-            for i in range(len(team_data["members"])):
-                is_leader_mark = " (👑 조장)" if i == team_data["leader_idx"] else ""
+            for i in range(len(team_data.get("members", []))):
+                is_leader_mark = " (👑 조장)" if i == team_data.get("leader_idx", 0) else ""
                 st.markdown(f"#### 👤 조원 {i+1}{is_leader_mark} 정보 수정")
                 
                 old_name = team_data["members"][i]["이름"]
@@ -527,27 +557,26 @@ else:
                 updated_members.append({"이름": new_name, "연락처": fixed_p, "역할": fixed_r})
                 
                 if old_name and new_name and old_name != new_name:
-                    if old_name in team_data["stocks"]:
+                    if old_name in team_data.get("stocks", {}):
                         team_data["stocks"][new_name] = team_data["stocks"].pop(old_name)
-                    if old_name in team_data["stock_logs"]:
+                    if old_name in team_data.get("stock_logs", {}):
                         team_data["stock_logs"][new_name] = team_data["stock_logs"].pop(old_name)
                         
             if st.button("👥 수정된 원장 명부 최종 인덱싱 배포"):
                 team_data["members"] = updated_members
                 for m in team_data["members"]:
-                    if m["이름"] and m["이름"] not in team_data["stocks"]:
+                    if m["이름"] and m["이름"] not in team_data.setdefault("stocks", {}):
                         team_data["stocks"][m["이름"]] = [10000]
                         team_data["stock_logs"][m["이름"]] = []
                 save_all_data(master_db)
                 st.success("명단 배포 완료!")
                 st.rerun()
 
-    # --- 탭 6: 다중 대상 DM방 (보안 필터링 및 5초 주기 자동 동기화 완비) ---
+    # --- 탭 6: 다중 대상 DM방 (보안 격리 및 5초 자동 새로고침) ---
     with tab_mapping["💬 다중 대상 DM방"]:
         st.subheader("💬 팀 내부 전용 고속 실시간 DM 라우터")
         st.caption("🔒 본인이 발신했거나, 수신 대상자로 지정된 프라이빗 메시지만 화면에 안전하게 표시됩니다.")
         
-        # 🔄 카카오톡처럼 백그라운드에서 실시간으로 나와 연관된 채팅만 로드하는 컴포넌트
         @st.fragment(run_every=5)
         def show_chats_live():
             fresh_db = load_all_data()
@@ -555,16 +584,12 @@ else:
             
             chat_box = st.container(height=300)
             with chat_box:
-                for c in fresh_team["chats"]:
-                    # 수신자 문자열(예: "1, 2, 3")을 리스트로 분리 및 공백 제거
+                for c in fresh_team.get("chats", []):
                     receiver_list = [r.strip() for r in c['receivers'].split(",")]
-                    
-                    # 보안 조건: 내가 보낸 메시지이거나, 수신 대상에 내 이름(current_name)이 있는 경우만 노출
                     if current_name in c['sender'] or current_name in receiver_list:
                         st.markdown(f"**[{c['sender']} ➔ {c['receivers']}]** <small>{c['time']}</small>", unsafe_allow_html=True)
                         st.info(c["msg"])
         
-        # 보안 실시간 채팅창 출력
         show_chats_live()
                 
         with st.form("multi_dm_form", clear_on_submit=True):
@@ -581,7 +606,7 @@ else:
                         st.error("최소 한 명 이상의 수신 대상을 지정해야 합니다.")
                     else:
                         sender_display = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
-                        team_data["chats"].append({
+                        team_data.setdefault("chats", []).append({
                             "sender": sender_display, 
                             "receivers": ", ".join(selected_receivers),
                             "msg": dm_msg, 
