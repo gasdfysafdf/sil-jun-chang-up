@@ -37,8 +37,10 @@ if "user_role" not in st.session_state:
     st.session_state.user_role = "leader" 
 if "step" not in st.session_state:
     st.session_state.step = "auth_login"
+if "active_dm_room" not in st.session_state:
+    st.session_state.active_dm_room = None  # 현재 선택된 카톡 DM 상대방 이름 저장용
 
-# 🔗 [수정완료] 멀티팀 초대 링크 주소 파라미터 강제 트래킹 및 검증 로직 격리
+# 🔗 멀티팀 초대 링크 주소 파라미터 강제 트래킹 및 검증 로직 격리
 qp = st.query_params
 if "invite" in qp and "team_id" in qp:
     target_team = qp["team_id"]
@@ -72,13 +74,14 @@ with st.sidebar:
     if st.session_state.current_user:
         role_label = "👑 조장" if st.session_state.user_role == "leader" else "👤 조원"
         t_name_display = team_data.get('team_name', '설정중') if team_data else "설정중"
-        st.success(f"소속: {t_name_display}\n\n계정: {st.session_state.current_user} [{role_label}]")
+        st.success(f"소속 조: {t_name_display}\n\n접속자: {st.session_state.current_user} [{role_label}]")
         
         if st.button("To. 로그아웃 (접속 종료)", use_container_width=True):
             st.session_state.current_user = None
             st.session_state.current_team_id = None
             st.session_state.user_role = "leader"
             st.session_state.step = "auth_login"
+            st.session_state.active_dm_room = None
             st.query_params.clear()
             st.rerun()
     else:
@@ -100,18 +103,17 @@ if st.session_state.step == "member_auth" and team_data:
     st.title("🔗 스타트리 조원 초대 가입 패스")
     st.subheader(f"🌳 '{team_data.get('team_name', '우리팀')}' 팀 워크스페이스")
     st.markdown(f"**🎯 프로젝트 주제:** {team_data.get('subject', '미정')} | **👑 담당 조장:** {leader_name}")
-    st.caption("조장 로그인 계정이 없어도, 지정된 명단 선택을 통해 즉시 접속이 가능합니다.")
     
     if not m_names:
-        st.error("❌ 조장님이 아직 조원 명부를 작성하지 않았습니다. 조장에게 초기 팀 설정을 완료해달라고 요청하세요.")
+        st.error("❌ 조장님이 아직 조원 명부를 작성하지 않았습니다.")
     else:
         only_members_names = [name for name in m_names if name != leader_name]
         
         if not only_members_names:
-            st.warning("현재 조장 외에 등록된 조원 성명이 존재하지 않습니다. 조장 수정창에서 명단을 업데이트 하세요.")
+            st.warning("현재 조장 외에 등록된 조원 성명이 존재하지 않습니다.")
             st.stop()
             
-        st.info("💡 명단에서 본인의 이름을 선택하여 입장해 주세요. 조장 계정은 이 창으로 진입할 수 없습니다.")
+        st.info("💡 명단에서 본인의 이름을 선택하여 입장해 주세요.")
         selected_member = st.selectbox("👤 당신은 누구인가요? 본인의 이름을 선택하세요.", only_members_names)
         
         if st.button("🎉 조원 권한으로 워크스페이스 입장"):
@@ -126,7 +128,6 @@ if st.session_state.step == "member_auth" and team_data:
 # ==========================================
 elif st.session_state.step == "auth_login":
     st.title("🔐 스타트리 조장 로그인 포털")
-    st.caption("동시에 여러 팀이 가입하고 고유 링크를 뽑아 사용하는 런칭 패키지입니다.")
     
     login_id = st.text_input("조장 아이디", key="login_id_input").strip()
     login_pw = st.text_input("비밀번호", type="password", key="login_pw_input").strip()
@@ -238,7 +239,7 @@ elif st.session_state.step == "setup_2":
 elif st.session_state.step == "setup_3":
     st.title("🚀 스타트리 초기 설정")
     st.subheader("3단계: 프로젝트 팀 명칭(조 이름)을 정해 주세요.")
-    t_name = st.text_input("예: 스파크조, 크리에이티브팀 등", key="t_name_setup")
+    t_name = st.text_input("예: 1조, 2조, 스파크조 등", key="t_name_setup")
     if st.button("다음 단계로"):
         master_db["teams_master"][st.session_state.current_team_id]["team_name"] = t_name if t_name.strip() else "우리팀"
         save_all_data(master_db)
@@ -248,7 +249,7 @@ elif st.session_state.step == "setup_3":
 elif st.session_state.step == "setup_4":
     st.title("🚀 스타트리 초기 설정")
     st.subheader("4단계: 프로젝트 팀 과제 주제를 입력해 주세요.")
-    subj = st.text_input("예: 핀테크 앱 창업 기획안, 캡스톤 디자인 등", key="subj_setup")
+    subj = st.text_input("예: 인공지능 창업 과제 등", key="subj_setup")
     if st.button("다음 단계로"):
         master_db["teams_master"][st.session_state.current_team_id]["subject"] = subj
         save_all_data(master_db)
@@ -272,11 +273,10 @@ elif st.session_state.step == "setup_link":
     host = st.context.headers.get("Host", "localhost:8501")
     protocol = "https" if "localhost" not in host else "http"
     
-    # 🔗 [수정완료] 주소 도메인이 고정되어 터지던 버그를 유동적인 현재 접속 Host 주소 기반 파라미터 매핑으로 전면 해결
     v_link = f"{protocol}://{host}/?invite=true&team_id={st.session_state.current_team_id}"
     
     st.info(v_link)
-    st.caption("💡 위 주소를 복사해 팀원들에게 공유하세요. 조원들은 조장 이름을 제외한 명단에서 가입 절차 없이 즉시 입장하게 됩니다.")
+    st.caption("💡 위 주소를 복사해 팀원들에게 공유하세요.")
     
     if st.button("🎉 링크 확인 완료 및 대시보드 오픈"):
         current_team = master_db["teams_master"][st.session_state.current_team_id]
@@ -302,11 +302,17 @@ else:
     current_name = st.session_state.current_user
     is_leader = (st.session_state.user_role == "leader")
     
+    # 조장 계정일 경우 실제 명단상의 이름(텍스트) 매핑 안전망 구동
+    if is_leader and leader_name != "미정":
+        my_chat_name = leader_name
+    else:
+        my_chat_name = current_name
+
     st.title(f"🌳 {team_data.get('team_name', '우리팀')} 독점 워크스페이스")
-    st.markdown(f"**🎯 주제:** {team_data.get('subject', '과제 주제')} | **👑 총괄조장:** {leader_name} | **👤 접속 중인 유저:** {current_name} ({'조장 플러그인' if is_leader else '조원 플러그인'})")
+    st.markdown(f"**🎯 주제:** {team_data.get('subject', '과제 주제')} | **👑 총괄조장:** {leader_name} | **👤 접속자:** {my_chat_name} ({'조장 플러그인' if is_leader else '조원 플러그인'})")
     st.write("---")
 
-    tab_titles = ["📢 팀 홈 및 공지사항", "✨ 스토리 피드 광장", "📊 기여도 주식 차트", "📅 달력 일정 관리", "💬 다중 대상 DM방"]
+    tab_titles = ["📢 팀 홈 및 공지사항", "✨ 스토리 피드 광장", "📊 기여도 주식 차트", "📅 달력 일정 관리", "💬 카톡형 1:1 DM룸"]
     if is_leader:
         tab_titles.insert(4, "👥 조원 정보 수정창")
         
@@ -372,9 +378,8 @@ else:
                         elif st_media.name.lower().endswith(".mp4"): media_type = "video"
                         elif st_media.name.lower().endswith((".mp3", ".wav")): media_type = "audio"
                             
-                    display_user_name = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
                     team_data.setdefault("stories", []).insert(0, {
-                        "user": display_user_name, "content": st_text, "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "user": f"{my_chat_name}", "content": st_text, "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "media_type": media_type, "media_data": media_data, "likes": 0, "comments": []
                     })
                     save_all_data(master_db)
@@ -404,7 +409,7 @@ else:
                         with st.form(f"comment_f_{idx}", clear_on_submit=True):
                             c_text = st.text_input("댓글 피드백 달기", key=f"cm_t_{idx}")
                             if st.form_submit_button("댓글 게시") and c_text.strip():
-                                master_db["teams_master"][st.session_state.current_team_id]["stories"][idx].setdefault("comments", []).append({"writer": f"{current_name}", "text": c_text})
+                                master_db["teams_master"][st.session_state.current_team_id]["stories"][idx].setdefault("comments", []).append({"writer": f"{my_chat_name}", "text": c_text})
                                 save_all_data(master_db)
                                 st.rerun()
             show_stories_live()
@@ -441,7 +446,7 @@ else:
                     st.line_chart(chart_df)
         show_stocks_live()
 
-    # --- 탭 4: 달력 일정 관리 (5초 자동 새로고침 및 타이포 에러 해결) ---
+    # --- 탭 4: 달력 일정 관리 (5초 자동 새로고침) ---
     with tab_mapping["📅 달력 일정 관리"]:
         st.subheader("📅 우리 팀 업무 결재선 타임라인")
         
@@ -493,7 +498,6 @@ else:
                         c_d, c_w, c_c, c_s, c_ops = st.columns([1.5, 1.2, 4.5, 1.0, 1.8])
                         
                         c_d.write(d_str)
-                        # 🛠️ [수정완료] St.write -> st.write 소문자 타이포 에러 원천 해결
                         c_w.write(f"👤 {ev.get('worker', '미지정')}")
                         c_c.write(ev.get('content', '내용 없음'))
                         
@@ -572,45 +576,72 @@ else:
                 st.success("명단 배포 완료!")
                 st.rerun()
 
-    # --- 탭 6: 다중 대상 DM방 (보안 격리 및 5초 자동 새로고침) ---
-    with tab_mapping["💬 다중 대상 DM방"]:
-        st.subheader("💬 팀 내부 전용 고속 실시간 DM 라우터")
-        st.caption("🔒 본인이 발신했거나, 수신 대상자로 지정된 프라이빗 메시지만 화면에 안전하게 표시됩니다.")
+    # --- 탭 6: 카톡/인스타형 프라이빗 1:1 채팅방 (수정 및 격리 완료) ---
+    with tab_mapping["💬 카톡형 1:1 DM룸"]:
+        st.subheader("💬 인스타그램/카카오톡 스타일 1:1 채팅 메신저")
         
-        @st.fragment(run_every=5)
-        def show_chats_live():
-            fresh_db = load_all_data()
-            fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
+        # 전체 조원 대상자 리스트업 추출 (나를 제외한 대화 상대 목록 확보)
+        all_associates = list(m_names)
+        if leader_name not in all_associates and leader_name != "미정": 
+            all_associates.append(leader_name)
             
-            chat_box = st.container(height=300)
-            with chat_box:
-                for c in fresh_team.get("chats", []):
-                    receiver_list = [r.strip() for r in c['receivers'].split(",")]
-                    if current_name in c['sender'] or current_name in receiver_list:
-                        st.markdown(f"**[{c['sender']} ➔ {c['receivers']}]** <small>{c['time']}</small>", unsafe_allow_html=True)
-                        st.info(c["msg"])
+        chat_partners = [person for person in all_associates if person != my_chat_name and person.strip() != ""]
         
-        show_chats_live()
-                
-        with st.form("multi_dm_form", clear_on_submit=True):
-            all_target_names = list(m_names)
-            if leader_name not in all_target_names: 
-                all_target_names.append(leader_name)
-                
-            selected_receivers = st.multiselect("메시지 수신 대상 조원 선택", all_target_names, default=all_target_names)
-            dm_msg = st.text_input("메시지 작성", placeholder="전송 시 수신 대상자의 화면에만 즉시 업데이트됩니다.")
+        if not chat_partners:
+            st.warning("현재 조에 대화할 수 있는 다른 조원이 등록되어 있지 않습니다.")
+        else:
+            # 좌측 채팅 리스트 / 우측 실시간 메신저창 화면 분할 분기
+            col_rooms, col_chat_window = st.columns([1, 2])
             
-            if st.form_submit_button("🚀 전용 채널 메시지 발송"):
-                if dm_msg.strip():
-                    if not selected_receivers:
-                        st.error("최소 한 명 이상의 수신 대상을 지정해야 합니다.")
-                    else:
-                        sender_display = f"{current_name}(조장)" if is_leader else f"{current_name}(조원)"
-                        team_data.setdefault("chats", []).append({
-                            "sender": sender_display, 
-                            "receivers": ", ".join(selected_receivers),
-                            "msg": dm_msg, 
-                            "time": datetime.now().strftime("%H:%M")
-                        })
-                        save_all_data(master_db)
+            with col_rooms:
+                st.write("📥 **채팅방 목록**")
+                for partner in chat_partners:
+                    # 현재 활성화된 방인 경우 시각적 포인트(Bolding) 주기
+                    is_active = (st.session_state.active_dm_room == partner)
+                    btn_label = f"💬 {partner}와의 대화방" + (" (열림)" if is_active else "")
+                    
+                    if st.button(btn_label, key=f"dm_room_btn_{partner}", use_container_width=True):
+                        st.session_state.active_dm_room = partner
                         st.rerun()
+                        
+            with col_chat_window:
+                if st.session_state.active_dm_room is None:
+                    st.info("👈 왼쪽 리스트에서 대화하고 싶은 조원의 방을 선택해 주세요!")
+                else:
+                    target_partner = st.session_state.active_dm_room
+                    st.markdown(f"### 💬 **{target_partner}** 님과의 프라이빗 토크방")
+                    st.caption("🔒 이 방의 메시지는 본인과 상대방 외에 다른 조원이나 다른 조의 화면에는 절대로 표시되지 않습니다.")
+                    
+                    # 5초마다 활성화된 방의 메세지만 실시간 동기화하여 출력
+                    @st.fragment(run_every=5)
+                    def show_private_messages_live():
+                        fresh_db = load_all_data()
+                        fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, {"chats": []})
+                        
+                        msg_container = st.container(height=300)
+                        with msg_container:
+                            for chat in fresh_team.get("chats", []):
+                                # 송수신자가 정확히 (나, 상대방) 한 쌍으로 묶인 프라이빗 메세지만 검증하여 바인딩
+                                is_my_send = (chat["sender"] == my_chat_name and chat["receiver"] == target_partner)
+                                is_my_recv = (chat["sender"] == target_partner and chat["receiver"] == my_chat_name)
+                                
+                                if is_my_send:
+                                    st.markdown(f"<div style='text-align: right; margin-bottom: 8px;'><span style='background-color: #ffe600; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%; text-align: left;'><b>내가 보냄</b><br>{chat['msg']} <small style='color: gray;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
+                                elif is_my_recv:
+                                    st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
+                    
+                    show_private_messages_live()
+                    
+                    # 메시지 입력 및 전송 영역
+                    with st.form("private_msg_form", clear_on_submit=True):
+                        input_msg = st.text_input("메시지 입력", placeholder=f"{target_partner}님에게 보낼 메시지를 적어주세요.")
+                        if st.form_submit_button("🚀 전송") and input_msg.strip():
+                            # 특정 조의 독립 데이터 공간에만 정확히 푸시
+                            master_db["teams_master"][st.session_state.current_team_id].setdefault("chats", []).append({
+                                "sender": my_chat_name,
+                                "receiver": target_partner,
+                                "msg": input_msg.strip(),
+                                "time": datetime.now().strftime("%H:%M")
+                            })
+                            save_all_data(master_db)
+                            st.rerun()
