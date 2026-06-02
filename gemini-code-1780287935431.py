@@ -361,7 +361,7 @@ else:
         st.write("---")
         show_notices_live()
 
-    # --- 탭 2: 피드 광장 (안전한 고유 ID 매핑 구조 및 Rerun 제거로 렉/오류 완전 해결) ---
+    # --- 탭 2: 피드 광장 ---
     with tab_mapping["✨ 스토리 피드 광장"]:
         st.subheader("📸 우리 팀 스토리 피드 보드")
         col_up, col_view = st.columns([2, 3])
@@ -379,7 +379,6 @@ else:
                         elif st_media.name.lower().endswith(".mp4"): media_type = "video"
                         elif st_media.name.lower().endswith((".mp3", ".wav")): media_type = "audio"
                             
-                    # 고유 ID(story_id) 부여하여 안전망 마련
                     team_data.setdefault("stories", []).insert(0, {
                         "story_id": str(uuid.uuid4()),
                         "user": f"{my_chat_name}", "content": st_text, "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -396,7 +395,6 @@ else:
                 stories_list = fresh_team.get("stories", [])
                 
                 for s in stories_list:
-                    # 마이그레이션 예외 처리 (기존에 id가 없던 데이터 보호용)
                     s_id = s.get("story_id", s.get("time", str(uuid.uuid4())))
                     
                     with st.container(border=True):
@@ -406,22 +404,18 @@ else:
                         elif s.get("media_type") == "video": st.video(s["media_data"])
                         elif s.get("media_type") == "audio": st.audio(s["media_data"])
                             
-                        # 👍 하트 기능 고도화: st.rerun()을 쓰지 않고 즉시 로컬 메모리 반영 후 백그라운드 DB 저장
                         if st.button(f"❤️ 응원 {s.get('likes', 0)}개", key=f"like_b_{s_id}"):
-                            # 실시간 변동 동기화용 타겟 추적
                             db_to_write = load_all_data()
                             for origin_s in db_to_write["teams_master"][st.session_state.current_team_id].get("stories", []):
                                 if origin_s.get("story_id") == s_id or (not origin_s.get("story_id") and origin_s.get("time") == s.get("time")):
                                     origin_s["likes"] = origin_s.get("likes", 0) + 1
-                                    s["likes"] = origin_s["likes"] # 현재 화면 캐시 즉시 업데이트
+                                    s["likes"] = origin_s["likes"]
                                     break
                             save_all_data(db_to_write)
                         
-                        # 💬 댓글 리스트 출력
                         for cm in s.get("comments", []):
                             st.markdown(f"**{cm['writer']}**: {cm['text']}")
                             
-                        # 📝 댓글 입력 폼: st.rerun()을 제거하여 화면 끊김 및 IndexError 완벽 차단
                         with st.form(f"comment_f_{s_id}", clear_on_submit=True):
                             c_text = st.text_input("댓글 피드백 달기", key=f"cm_t_{s_id}")
                             if st.form_submit_button("댓글 게시") and c_text.strip():
@@ -431,7 +425,7 @@ else:
                                 for origin_s in db_to_write["teams_master"][st.session_state.current_team_id].get("stories", []):
                                     if origin_s.get("story_id") == s_id or (not origin_s.get("story_id") and origin_s.get("time") == s.get("time")):
                                         origin_s.setdefault("comments", []).append(new_comment)
-                                        s.setdefault("comments", []).append(new_comment) # 현재 화면 캐시 즉시 업데이트
+                                        s.setdefault("comments", []).append(new_comment)
                                         break
                                 save_all_data(db_to_write)
             show_stories_live()
@@ -556,10 +550,22 @@ else:
                             c_ops.write("🔒 변경불가")
         show_calendar_live()
 
-    # --- 탭 5: 조원 정보 수정창 ---
+    # --- 탭 5: 조원 정보 수정창 (초대 링크 조회 기능 추가 완료) ---
     if is_leader:
         with tab_mapping["👥 조원 정보 수정창"]:
-            st.subheader("👥 조원 명부 실시간 편집 마이그레이션")
+            st.subheader("👥 조원 명부 및 워크스페이스 관리실")
+            
+            # 🔗 [추가] 고유 얼라이언스 초대 링크 실시간 표시 컴포넌트
+            st.markdown("#### 🔗 우리 조 고유 초대 링크 복사 및 공유")
+            host = st.context.headers.get("Host", "localhost:8501")
+            protocol = "https" if "localhost" not in host else "http"
+            current_invite_link = f"{protocol}://{host}/?invite=true&team_id={st.session_state.current_team_id}"
+            
+            st.info(current_invite_link)
+            st.caption("💡 위 주소를 복사하여 조원들에게 전달하면, 조원들이 언제든지 이 프로젝트 공간으로 재접속해 들어올 수 있습니다.")
+            st.write("---")
+            
+            st.markdown("#### ⚙️ 팀 메타데이터 설정")
             edit_team_name = st.text_input("조 이름 변경", value=team_data.get("team_name", ""))
             edit_subject = st.text_input("프로젝트 주제 변경", value=team_data.get("subject", ""))
             if st.button("핵심 메타데이터 수정 동기화"):
@@ -680,7 +686,7 @@ else:
                                 if is_me:
                                     st.markdown(f"<div style='text-align: right; margin-bottom: 8px;'><span style='background-color: #ffe600; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%; text-align: left;'><b>내가 보냄</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
                                 else:
-                                    st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
+                                    st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
                     
                     with st.form(f"msg_send_form_{target_room['room_id']}", clear_on_submit=True):
                         text_input = st.text_input("메시지 입력", placeholder="대화를 입력해 보세요.", key=f"chat_text_in_{target_room['room_id']}")
