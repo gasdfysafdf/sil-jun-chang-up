@@ -550,12 +550,11 @@ else:
                             c_ops.write("🔒 변경불가")
         show_calendar_live()
 
-    # --- 탭 5: 조원 정보 수정창 (초대 링크 조회 기능 추가 완료) ---
+    # --- 탭 5: 조원 정보 수정창 (이름 전역 동기화 마이그레이션 고도화) ---
     if is_leader:
         with tab_mapping["👥 조원 정보 수정창"]:
             st.subheader("👥 조원 명부 및 워크스페이스 관리실")
             
-            # 🔗 [추가] 고유 얼라이언스 초대 링크 실시간 표시 컴포넌트
             st.markdown("#### 🔗 우리 조 고유 초대 링크 복사 및 공유")
             host = st.context.headers.get("Host", "localhost:8501")
             protocol = "https" if "localhost" not in host else "http"
@@ -577,6 +576,10 @@ else:
                 
             st.write("---")
             updated_members = []
+            
+            # 실시간 전역 변환을 위한 매핑 딕셔너리 생성 준비
+            name_changes = {}
+            
             for i in range(len(team_data.get("members", []))):
                 is_leader_mark = " (👑 조장)" if i == team_data.get("leader_idx", 0) else ""
                 st.markdown(f"#### 👤 조원 {i+1}{is_leader_mark} 정보 수정")
@@ -589,19 +592,52 @@ else:
                 updated_members.append({"이름": new_name, "연락처": fixed_p, "역할": fixed_r})
                 
                 if old_name and new_name and old_name != new_name:
-                    if old_name in team_data.get("stocks", {}):
-                        team_data["stocks"][new_name] = team_data["stocks"].pop(old_name)
-                    if old_name in team_data.get("stock_logs", {}):
-                        team_data["stock_logs"][new_name] = team_data["stock_logs"].pop(old_name)
+                    name_changes[old_name] = new_name
                         
             if st.button("👥 수정된 원장 명부 최종 인덱싱 배포"):
+                # 1. 기여도 주식/로그 명칭 마이그레이션
+                for old_n, new_n in name_changes.items():
+                    if old_n in team_data.get("stocks", {}):
+                        team_data["stocks"][new_n] = team_data["stocks"].pop(old_n)
+                    if old_n in team_data.get("stock_logs", {}):
+                        team_data["stock_logs"][new_n] = team_data["stock_logs"].pop(old_n)
+                        
+                    # 2. 메신저(DM) 단톡방 참여 멤버 리스트 전수 마이그레이션
+                    for room in team_data.get("chat_rooms", []):
+                        if "members" in room:
+                            room["members"] = [new_n if m == old_n else m for m in room["members"]]
+                            
+                    # 3. 메신저 기존 대화 기록(sender) 일괄 변경
+                    for chat in team_data.get("chats_archive", []):
+                        if chat.get("sender") == old_n:
+                            chat["sender"] = new_n
+                            
+                    # 4. 달력 업무 타임라인 담당자 일괄 변경
+                    for date_key, events in team_data.get("calendar_events", {}).items():
+                        for ev in events:
+                            if ev.get("worker") == old_n:
+                                ev["worker"] = new_n
+                                
+                    # 5. 피드 광장 스토리 작성자 일괄 변경
+                    for story in team_data.get("stories", []):
+                        if story.get("user") == old_n:
+                            story["user"] = new_n
+                        # 피드 댓글 작성자 일괄 변경
+                        for comment in story.get("comments", []):
+                            if comment.get("writer") == old_n:
+                                comment["writer"] = new_n
+
+                    # 6. 현재 브라우저 세션 사용자 동기화 (본인 이름을 바꿨을 경우 튕김 방지)
+                    if st.session_state.current_user == old_n:
+                        st.session_state.current_user = new_n
+
                 team_data["members"] = updated_members
                 for m in team_data["members"]:
                     if m["이름"] and m["이름"] not in team_data.setdefault("stocks", {}):
                         team_data["stocks"][m["이름"]] = [10000]
                         team_data["stock_logs"][m["이름"]] = []
                 save_all_data(master_db)
-                st.success("명단 배포 완료!")
+                st.success("🎉 성명 변경 사항이 DM방 멤버, 기존 대화록, 달력 배정표, 피드 광장에 실시간 통합 반영되었습니다!")
                 st.rerun()
 
     # --- 탭 6: 카톡형 커스텀 메신저 ---
