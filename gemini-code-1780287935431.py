@@ -72,6 +72,31 @@ def save_all_data(master_db):
     except Exception as e:
         st.error(f"DB 저장 오류: {e}")
 
+def load_team_data(team_id):
+    """전체 DB 대신 특정 팀 데이터만 빠르게 로드 (채팅 전용)"""
+    try:
+        res = supabase.table("startree_db").select("data->teams_master").eq("id", "main").execute()
+        if res.data and len(res.data) > 0:
+            teams = res.data[0].get("data->teams_master") or res.data[0].get("teams_master", {})
+            return teams.get(team_id, {})
+        return {}
+    except Exception:
+        # fallback: 전체 로드
+        full = load_all_data()
+        return full.get("teams_master", {}).get(team_id, {})
+
+def upload_chat_file(team_id, room_id, file_bytes, file_name):
+    """Supabase Storage에 채팅 첨부파일 업로드, 공개 URL 반환"""
+    try:
+        path = f"chat_files/{team_id}/{room_id}/{uuid.uuid4()}_{file_name}"
+        supabase.storage.from_("startree-files").upload(
+            path, file_bytes, {"content-type": "application/octet-stream", "upsert": "true"}
+        )
+        res = supabase.storage.from_("startree-files").get_public_url(path)
+        return res
+    except Exception as e:
+        return None
+
 master_db = load_all_data()
 
 # --- [개별 브라우저 세션 상태 초기화] ---
@@ -1201,24 +1226,27 @@ else:
                     st.rerun()
                     
         st.write("---")
-        
-        @st.fragment(run_every=6)
+
+        # ✅ 랙 개선: fragment 안에 전송 폼까지 포함 → 메시지 전송 시 앱 전체 rerun 없음
+        # ✅ 파일 전송: Supabase Storage 업로드 후 URL을 메시지에 첨부
+        @st.fragment(run_every=3)
         def show_entire_chat_system_live():
-            fresh_db = load_all_data()
-            fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, {"chat_rooms": [], "chats_archive": []})
+            # 전체 DB 대신 현재 팀 데이터만 로드
+            fresh_team = load_team_data(st.session_state.current_team_id)
+            if not fresh_team:
+                fresh_team = {"chat_rooms": [], "chats_archive": []}
             
             col_rooms, col_chat_window = st.columns([1, 2])
             my_accessible_rooms = [r for r in fresh_team.get("chat_rooms", []) if my_chat_name in r.get("members", [])]
             
             with col_rooms:
-                st.write("📥 **내 참여 채팅방 리스트 (2초 자동동기화)**")
+                st.write("📥 **내 참여 채팅방 리스트 (3초 자동동기화)**")
                 if not my_accessible_rooms:
                     st.caption("참여 중인 채팅방이 없습니다.")
                 else:
                     for rm in my_accessible_rooms:
                         is_active = (st.session_state.active_chat_room_id == rm["room_id"])
-                        label = f"💬 {rm['title']} ({len(rm['members'])}명)" + (" (열림)" if is_active else "")
-                        
+                        label = f"💬 {rm['title']} ({len(rm['members'])}명)" + (" ✅" if is_active else "")
                         if st.button(label, key=f"room_tab_{rm['room_id']}", use_container_width=True):
                             st.session_state.active_chat_room_id = rm["room_id"]
                             st.rerun()
@@ -1234,45 +1262,101 @@ else:
                     with c_title:
                         st.markdown(f"### 💬 **{target_room['title']}**")
                         st.caption(f"👥 참여 멤버: {', '.join(target_room['members'])}")
-                    
                     with c_exit:
                         if st.button("🚪 이 방 나가기", key=f"exit_room_{target_room['room_id']}", use_container_width=True):
                             db_write = load_all_data()
-                            target_team_db = db_write["teams_master"][st.session_state.current_team_id]
-                            
-                            for origin_room in target_team_db.get("chat_rooms", []):
+                            for origin_room in db_write["teams_master"][st.session_state.current_team_id].get("chat_rooms", []):
                                 if origin_room["room_id"] == target_room["room_id"]:
                                     if my_chat_name in origin_room["members"]:
                                         origin_room["members"].remove(my_chat_name)
                                     break
-                                    
                             save_all_data(db_write)
                             st.session_state.active_chat_room_id = None
                             st.toast("채팅방에서 퇴장하여 대화 내용 수신이 해제되었습니다.")
                             st.rerun()
                     
+                    # 채팅 메시지 렌더링
                     msg_box = st.container(height=320)
                     with msg_box:
                         for chat in fresh_team.get("chats_archive", []):
                             if chat.get("room_id") == target_room["room_id"]:
                                 is_me = (chat["sender"] == my_chat_name)
+                                file_html = ""
+                                # 파일 첨부가 있으면 다운로드 링크 추가
+                                if chat.get("file_url") and chat.get("file_name"):
+                                    file_html = f"<br>📎 <a href='{chat['file_url']}' target='_blank' style='color:#0066cc;'>{chat['file_name']}</a>"
                                 if is_me:
-                                    st.markdown(f"<div style='text-align: right; margin-bottom: 8px;'><span style='background-color: #ffe600; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%; text-align: left;'><b>내가 보냄</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
+                                    st.markdown(
+                                        f"<div style='text-align:right;margin-bottom:8px;'>"
+                                        f"<span style='background-color:#ffe600;color:black;padding:6px 12px;border-radius:12px;display:inline-block;max-width:70%;text-align:left;'>"
+                                        f"<b>내가 보냄</b><br>{chat['msg']}{file_html}"
+                                        f"<small style='color:gray;font-size:10px;'> {chat['time']}</small></span></div>",
+                                        unsafe_allow_html=True
+                                    )
                                 else:
-                                    st.markdown(f"<div style='text-align: left; margin-bottom: 8px;'><span style='background-color: #f1f1f1; color: black; padding: 6px 12px; border-radius: 12px; display: inline-block; max-width: 70%;'><b>{chat['sender']}</b><br>{chat['msg']} <small style='color: gray; font-size:10px;'>{chat['time']}</small></span></div>", unsafe_allow_html=True)
+                                    st.markdown(
+                                        f"<div style='text-align:left;margin-bottom:8px;'>"
+                                        f"<span style='background-color:#f1f1f1;color:black;padding:6px 12px;border-radius:12px;display:inline-block;max-width:70%;'>"
+                                        f"<b>{chat['sender']}</b><br>{chat['msg']}{file_html}"
+                                        f"<small style='color:gray;font-size:10px;'> {chat['time']}</small></span></div>",
+                                        unsafe_allow_html=True
+                                    )
                     
+                    # ✅ 전송 폼을 fragment 안에 배치 → 전송 시 앱 전체 rerun 없이 fragment만 갱신
                     with st.form(f"msg_send_form_{target_room['room_id']}", clear_on_submit=True):
                         text_input = st.text_input("메시지 입력", placeholder="대화를 입력해 보세요.", key=f"chat_text_in_{target_room['room_id']}")
-                        if st.form_submit_button("🚀 전송") and text_input.strip():
-                            m_db = load_all_data()
-                            m_db["teams_master"][st.session_state.current_team_id].setdefault("chats_archive", []).append({
-                                "room_id": target_room["room_id"],
-                                "sender": my_chat_name,
-                                "msg": text_input.strip(),
-                                "time": datetime.now().strftime("%H:%M")
-                            })
-                            save_all_data(m_db)
-                            st.rerun()
+                        # ✅ 파일 첨부 업로더 추가
+                        attached_file = st.file_uploader(
+                            "📎 파일 첨부 (이미지·PDF·문서 등, 선택사항)",
+                            key=f"chat_file_in_{target_room['room_id']}",
+                            label_visibility="collapsed"
+                        )
+                        col_send, col_hint = st.columns([1, 3])
+                        with col_send:
+                            submitted = st.form_submit_button("🚀 전송", use_container_width=True)
+                        with col_hint:
+                            st.caption("📎 파일을 첨부하면 링크로 전송됩니다.")
+                        
+                        if submitted and (text_input.strip() or attached_file):
+                            file_url = None
+                            file_name = None
+                            
+                            # 파일이 첨부된 경우 Supabase Storage 업로드
+                            if attached_file is not None:
+                                file_name = attached_file.name
+                                file_bytes = attached_file.read()
+                                
+                                # Storage 버킷 업로드 시도
+                                file_url = upload_chat_file(
+                                    st.session_state.current_team_id,
+                                    target_room["room_id"],
+                                    file_bytes,
+                                    file_name
+                                )
+                                
+                                # Storage 없을 경우 Base64 fallback (소용량 파일만)
+                                if file_url is None and len(file_bytes) < 1_000_000:  # 1MB 미만만 허용
+                                    b64 = base64.b64encode(file_bytes).decode()
+                                    ext = file_name.split(".")[-1].lower()
+                                    mime = "image/jpeg" if ext in ("jpg","jpeg") else f"application/{ext}"
+                                    file_url = f"data:{mime};base64,{b64}"
+                                elif file_url is None:
+                                    st.warning("⚠️ 파일 업로드 실패: Supabase Storage 버킷 'startree-files'를 설정해 주세요.")
+                                    file_name = None
+                            
+                            msg_text = text_input.strip() if text_input.strip() else (f"[파일: {file_name}]" if file_name else "")
+                            if msg_text:
+                                m_db = load_all_data()
+                                m_db["teams_master"][st.session_state.current_team_id].setdefault("chats_archive", []).append({
+                                    "room_id": target_room["room_id"],
+                                    "sender": my_chat_name,
+                                    "msg": msg_text,
+                                    "file_url": file_url,
+                                    "file_name": file_name,
+                                    "time": datetime.now().strftime("%H:%M")
+                                })
+                                save_all_data(m_db)
+                                st.rerun()
 
         show_entire_chat_system_live()
 
