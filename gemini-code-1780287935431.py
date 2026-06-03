@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import uuid
 import json
+import base64
 from datetime import datetime, timedelta
 from supabase import create_client, Client
 
@@ -594,7 +595,7 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         st.subheader("📥 1:1 버그 제보 및 SOS 문의 수신함")
         
         # 2초 간격 실시간 모니터링
-        @st.fragment(run_every=3)
+        @st.fragment(run_every=6)
         def show_admin_bug_reports_live():
             fresh_db = load_all_data()
             reports = fresh_db["admin_master"].get("bug_reports", [])
@@ -614,7 +615,8 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                             st.warning(f"💬 내용: {rep['content']}")
                         with col_r2:
                             if rep.get("image_bytes"):
-                                st.image(rep["image_bytes"], caption="📷 클릭 시 확대 가능", use_container_width=True)
+                                img_data = base64.b64decode(rep["image_bytes"]) if isinstance(rep["image_bytes"], str) else rep["image_bytes"]
+                                st.image(img_data, caption="📷 클릭 시 확대 가능", use_container_width=True)
                             else:
                                 st.caption("첨부 이미지 없음")
                         
@@ -816,7 +818,7 @@ else:
     my_chat_name = leader_name if (is_leader and leader_name != "미정") else current_name
 
     # 🚨 [신규 기능 연동] 전사 긴급 공지 실시간 강제 상단 팝업 로드 (3초 자동새로고침)
-    @st.fragment(run_every=3)
+    @st.fragment(run_every=6)
     def show_system_notice_banner():
         fresh_db = load_all_data()
         notices = fresh_db["admin_master"].get("system_notices", [])
@@ -842,7 +844,7 @@ else:
     with tab_mapping["📢 팀 홈 및 공지사항"]:
         st.subheader("📌 팀 고유 공지사항")
         
-        @st.fragment(run_every=3)
+        @st.fragment(run_every=6)
         def show_notices_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -852,7 +854,8 @@ else:
                     st.caption(f"📅 {n['date']}")
                     st.write(n["content"])
                     if n.get("file_bytes") is not None:
-                        st.download_button(label=f"📎 파일 열기 ({n['file_name']})", data=n["file_bytes"], file_name=n["file_name"], key=f"notice_live_file_{idx}")
+                        file_data = base64.b64decode(n["file_bytes"]) if isinstance(n["file_bytes"], str) else n["file_bytes"]
+                        st.download_button(label=f"📎 파일 열기 ({n['file_name']})", data=file_data, file_name=n["file_name"], key=f"notice_live_file_{idx}")
         
         if is_leader:
             with st.form("notice_form", clear_on_submit=True):
@@ -861,14 +864,14 @@ else:
                 if st.form_submit_button("📢 공지사항 전면 게시"):
                     if notice_text.strip():
                         file_name = "첨부 파일 없음"
-                        file_bytes = None
+                        file_b64 = None
                         if uploaded_file is not None:
                             file_name = uploaded_file.name
-                            file_bytes = uploaded_file.read()
+                            file_b64 = base64.b64encode(uploaded_file.read()).decode("utf-8")
                             
                         team_data.setdefault("notices", []).insert(0, {
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                            "content": notice_text, "file_name": file_name, "file_bytes": file_bytes
+                            "content": notice_text, "file_name": file_name, "file_bytes": file_b64
                         })
                         save_all_data(master_db)
                         st.success("공지가 실시간 전송되었습니다!")
@@ -892,7 +895,8 @@ else:
                     media_type = None
                     media_data = None
                     if st_media is not None:
-                        media_data = st_media.read()
+                        raw = st_media.read()
+                        media_data = base64.b64encode(raw).decode("utf-8")
                         if st_media.name.lower().endswith((".png", ".jpg", ".jpeg")): media_type = "image"
                         elif st_media.name.lower().endswith(".mp4"): media_type = "video"
                         elif st_media.name.lower().endswith((".mp3", ".wav")): media_type = "audio"
@@ -906,7 +910,7 @@ else:
                     st.rerun()
                     
         with col_view:
-            @st.fragment(run_every=3)
+            @st.fragment(run_every=6)
             def show_stories_live():
                 fresh_db = load_all_data()
                 fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -918,9 +922,15 @@ else:
                     with st.container(border=True):
                         st.markdown(f"🔴 **{s['user']}** | *{s['time']}*")
                         st.write(s["content"])
-                        if s.get("media_type") == "image": st.image(s["media_data"], use_container_width=True)
-                        elif s.get("media_type") == "video": st.video(s["media_data"])
-                        elif s.get("media_type") == "audio": st.audio(s["media_data"])
+                        if s.get("media_type") == "image":
+                            img_data = base64.b64decode(s["media_data"]) if isinstance(s["media_data"], str) else s["media_data"]
+                            st.image(img_data, use_container_width=True)
+                        elif s.get("media_type") == "video":
+                            vid_data = base64.b64decode(s["media_data"]) if isinstance(s["media_data"], str) else s["media_data"]
+                            st.video(vid_data)
+                        elif s.get("media_type") == "audio":
+                            aud_data = base64.b64decode(s["media_data"]) if isinstance(s["media_data"], str) else s["media_data"]
+                            st.audio(aud_data)
                             
                         if st.button(f"❤️ 응원 {s.get('likes', 0)}개", key=f"like_b_{s_id}"):
                             db_to_write = load_all_data()
@@ -952,7 +962,7 @@ else:
     with tab_mapping["📊 기여도 주식 차트"]:
         st.subheader("📊 조원 기여 가치 지분 대시보드")
         
-        @st.fragment(run_every=3)
+        @st.fragment(run_every=6)
         def show_stocks_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -1013,7 +1023,7 @@ else:
         
         st.write("---")
         
-        @st.fragment(run_every=3)
+        @st.fragment(run_every=6)
         def show_calendar_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, team_data)
@@ -1192,7 +1202,7 @@ else:
                     
         st.write("---")
         
-        @st.fragment(run_every=3)
+        @st.fragment(run_every=6)
         def show_entire_chat_system_live():
             fresh_db = load_all_data()
             fresh_team = fresh_db["teams_master"].get(st.session_state.current_team_id, {"chat_rooms": [], "chats_archive": []})
@@ -1281,10 +1291,10 @@ else:
                 
                 if st.form_submit_button("🚨 마스터 관제탑으로 SOS 긴급 전송"):
                     if bug_content.strip():
-                        img_bytes = None
+                        img_b64 = None
                         img_name = "없음"
                         if bug_img is not None:
-                            img_bytes = bug_img.read()
+                            img_b64 = base64.b64encode(bug_img.read()).decode("utf-8")
                             img_name = bug_img.name
                             
                         m_db = load_all_data()
@@ -1294,7 +1304,7 @@ else:
                             "team_name": team_data.get('team_name', '우리팀'),
                             "sender": my_chat_name,
                             "content": bug_content.strip(),
-                            "image_bytes": img_bytes,
+                            "image_bytes": img_b64,
                             "image_name": img_name,
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "reply": None,
@@ -1307,7 +1317,7 @@ else:
         with col_sos2:
             st.markdown("#### 📬 내 제보 건 실시간 처리 및 관리자 답변 현황")
             
-            @st.fragment(run_every=3)
+            @st.fragment(run_every=6)
             def show_my_sos_status_live():
                 fresh_db = load_all_data()
                 all_reports = fresh_db["admin_master"].get("bug_reports", [])
