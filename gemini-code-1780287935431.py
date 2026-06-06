@@ -11,12 +11,48 @@ st.set_page_config(page_title="스타트리 (Startree)", page_icon="🌳", layou
 # =============================================
 # [용량 최적화 유틸리티]
 # =============================================
-MAX_IMAGE_KB = 300      # 이미지 최대 300KB (base64 후 ~400KB)
-MAX_VIDEO_KB = 3000     # 영상 최대 3MB
-MAX_AUDIO_KB = 2000     # 음성 최대 2MB
-MAX_FILE_KB   = 1000    # 첨부파일 최대 1MB
-MAX_CHAT_MSGS = 200     # 채팅방당 최대 보관 메시지
-MAX_STORIES   = 30      # 팀당 최대 스토리 수
+MAX_IMAGE_KB  = 150     # 이미지 최대 150KB (압축 강화)
+MAX_VIDEO_KB  = 2000    # 영상 최대 2MB
+MAX_AUDIO_KB  = 1500    # 음성 최대 1.5MB
+MAX_FILE_KB   = 800     # 첨부파일 최대 800KB
+MAX_CHAT_MSGS = 150     # 채팅방당 최대 보관 메시지
+MAX_STORIES   = 20      # 팀당 최대 스토리 수
+MAX_NOTICES   = 30      # 팀당 최대 공지 수
+MAX_SOS_TOTAL = 200     # SOS 전체 최대 보관 수
+SUPABASE_LIMIT_BYTES = 900_000  # Supabase JSONB 실질 안전 한계 ~900KB
+
+def estimate_db_size(db: dict) -> int:
+    try:
+        return len(json.dumps(db, ensure_ascii=False).encode("utf-8"))
+    except Exception:
+        return 0
+
+def db_size_label(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes/1024:.1f} KB"
+    else:
+        return f"{size_bytes/1024/1024:.2f} MB"
+
+def auto_trim_db(db: dict) -> dict:
+    for tid, t in db.get("teams_master", {}).items():
+        chats = t.get("chats_archive", [])
+        if len(chats) > MAX_CHAT_MSGS:
+            t["chats_archive"] = chats[-MAX_CHAT_MSGS:]
+        stories = t.get("stories", [])
+        if len(stories) > MAX_STORIES:
+            t["stories"] = stories[:MAX_STORIES]
+        notices = t.get("notices", [])
+        if len(notices) > MAX_NOTICES:
+            t["notices"] = notices[:MAX_NOTICES]
+    reports = db.get("admin_master", {}).get("bug_reports", [])
+    if len(reports) > MAX_SOS_TOTAL:
+        done = [r for r in reports if r["status"] == "✔️ 처리완료"]
+        pending = [r for r in reports if r["status"] != "✔️ 처리완료"]
+        trimmed = pending + done[-(MAX_SOS_TOTAL - len(pending)):]
+        db["admin_master"]["bug_reports"] = trimmed
+    return db
 
 def compress_image_b64(raw_bytes: bytes, max_kb: int = MAX_IMAGE_KB) -> str:
     """PIL로 이미지를 리사이즈·압축 후 base64 반환. PIL 없으면 그냥 b64 반환."""
@@ -110,8 +146,8 @@ def load_all_data():
 
 def save_all_data(master_db):
     try:
+        master_db = auto_trim_db(master_db)
         supabase.table("startree_db").upsert({"id": "main", "data": master_db}).execute()
-        # 저장 후 캐시 즉시 무효화 → 다음 로드 때 최신 데이터 반영
         load_all_data.clear()
     except Exception as e:
         st.error(f"DB 저장 오류: {e}")
@@ -479,6 +515,8 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         "📢 전사 공지",
         "📈 활동 분석",
         "🧹 데이터 관리",
+        "💾 용량 관리",
+        "📋 활동 로그",
         "⚙️ 보안 설정"
     ])
 
