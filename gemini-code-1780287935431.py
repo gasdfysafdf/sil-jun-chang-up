@@ -121,37 +121,39 @@ DEFAULT_DB = {
 }
 
 # =============================================
-# [DB 핵심 수정] TTL 캐시로 폭발적 쿼리 방지
-# 6초 캐시 → fragment run_every=6과 맞춤
+# [DB 핵심 수정] 메타/팀 데이터별 캐시 엔진
 # =============================================
-@st.cache_data(ttl=5)
-def load_all_data():
-    try:
-        res = supabase.table("startree_db").select("data").eq("id", "main").execute()
-        if res.data and len(res.data) > 0:
-            db = res.data[0]["data"]
-            if "admin_master" not in db:
-                db["admin_master"] = DEFAULT_DB["admin_master"].copy()
-            if "users_master" not in db:
-                db["users_master"] = {}
-            if "teams_master" not in db:
-                db["teams_master"] = {}
-            return db
-        else:
-            supabase.table("startree_db").insert({"id": "main", "data": DEFAULT_DB}).execute()
-            return DEFAULT_DB.copy()
-    except Exception as e:
-        st.error(f"DB 연결 오류: {e}")
-        return DEFAULT_DB.copy()
 
-def save_all_data(master_db):
+@st.cache_data(ttl=7)
+def get_cached_meta():
     try:
-        master_db = auto_trim_db(master_db)
-        supabase.table("startree_db").upsert({"id": "main", "data": master_db}).execute()
-        load_all_data.clear()
-    except Exception as e:
-        st.error(f"DB 저장 오류: {e}")
+        res = supabase.table("startree_meta").select("data").eq("id", "main").single().execute()
+        return res.data["data"]
+    except:
+        return {"users_master": {}, "admin_master": {"system_notices": [], "bug_reports": []}}
 
+@st.cache_data(ttl=7)
+def get_cached_team(team_id):
+    try:
+        res = supabase.table("startree_teams").select("data").eq("id", team_id).single().execute()
+        return res.data["data"]
+    except:
+        return {}
+
+# [저장 후 캐시 초기화 함수]
+def save_meta_data(master_db):
+    try:
+        supabase.table("startree_meta").upsert({"id": "main", "data": master_db}).execute()
+        st.cache_data.clear() 
+    except Exception as e:
+        st.error(f"메타 데이터 저장 오류: {e}")
+
+def save_team_data(team_id, team_db):
+    try:
+        supabase.table("startree_teams").upsert({"id": team_id, "data": team_db}).execute()
+        st.cache_data.clear() 
+    except Exception as e:
+        st.error(f"팀 데이터 저장 오류: {e}")
 # =============================================
 # [세션 초기화]
 # =============================================
@@ -169,7 +171,7 @@ for k, v in _defaults.items():
 # 초대 링크 처리
 qp = st.query_params
 if "invite" in qp and "team_id" in qp:
-    _db = load_all_data()
+    _db = get_cached_meta()
     target_team = qp["team_id"]
     if target_team in _db["teams_master"]:
         if st.session_state.current_user is None and st.session_state.step not in ("main_home", "admin_dashboard"):
@@ -177,14 +179,20 @@ if "invite" in qp and "team_id" in qp:
             st.session_state.user_role = "member"
             st.session_state.step = "member_auth"
 
-# 현재 팀 데이터 매핑
-master_db = load_all_data()
-team_data = None
+# 1. 관리자/유저 정보는 meta에서
+master_db = get_cached_meta() 
+
+# 2. 내 팀 정보는 team_data에서 (캐시된 함수 활용)
+team_id = st.session_state.get("current_team_id")
+team_data = get_cached_team(team_id) if team_id else {}
+
 m_names = []
 leader_name = "미정"
-if st.session_state.current_team_id and st.session_state.current_team_id in master_db["teams_master"]:
-    team_data = master_db["teams_master"][st.session_state.current_team_id]
+
+# 3. 데이터 매핑 (이제 팀 정보가 바로 들어오므로 아주 간단해집니다)
+if team_id and team_data:
     m_names = [m["이름"] for m in team_data.get("members", []) if m.get("이름")]
+    
     if team_data.get("members") and "leader_idx" in team_data:
         try:
             leader_name = team_data["members"][team_data["leader_idx"]]["이름"]
@@ -197,7 +205,7 @@ if st.session_state.current_team_id and st.session_state.current_team_id in mast
 with st.sidebar:
     st.title("🌳 스타트리")
     if st.button("🔄 새로고침", use_container_width=True):
-        load_all_data.clear()
+        st.cache_data.clear()
         st.rerun()
 
     st.write("---")
@@ -281,25 +289,24 @@ elif st.session_state.step == "auth_login":
         col_l1, col_l2 = st.columns(2)
         with col_l1:
             if st.button("로그인", use_container_width=True, type="primary"):
-                _db = load_all_data()
-                admin_cfg = _db["admin_master"]
+                meta_db = get_cached_meta()
+                admin_cfg = meta_db["admin_master"]
                 if login_id == admin_cfg["admin_id"] and login_pw == admin_cfg["admin_pw"]:
                     st.session_state.current_user = login_id
                     st.session_state.user_role = "admin"
                     st.session_state.step = "admin_dashboard"
                     st.rerun()
-                elif login_id in _db["users_master"] and _db["users_master"][login_id]["pw"] == login_pw:
-                    user_info = _db["users_master"][login_id]
+                elif login_id in meta_db["users_master"] and meta_db["users_master"][login_id]["pw"] == login_pw:
+                    user_info = meta_db["users_master"][login_id]
                     st.session_state.current_user = login_id
                     st.session_state.user_role = "leader"
                     st.session_state.current_team_id = user_info["team_id"]
-                    st.session_state.step = "main_home" if user_info["team_id"] in _db["teams_master"] else "setup_1"
+                    st.session_state.step = "main_home" if user_info["team_id"] in meta_db["teams_master"] else "setup_1"
                     st.rerun()
                 else:
                     st.error("아이디 또는 비밀번호가 잘못되었습니다.")
         with col_l2:
-            _db_sec = load_all_data()
-            _team_lock = _db_sec["admin_master"].get("security_settings", {}).get("new_team_lock", False)
+            _team_lock = meta_db["admin_master"].get("security_settings", {}).get("new_team_lock", False)
             if _team_lock:
                 st.button("🔒 팀 등록 잠김 (관리자 설정)", use_container_width=True, disabled=True)
             else:
@@ -310,14 +317,14 @@ elif st.session_state.step == "auth_login":
         st.write("---")
         with st.expander("🔍 ID / 비밀번호 찾기"):
             find_tab = st.radio("", ["아이디 찾기", "비밀번호 찾기"], horizontal=True, key="find_tab_radio")
-            _db = load_all_data()
+            meta_db = get_cached_meta()
 
             if find_tab == "아이디 찾기":
                 find_pw = st.text_input("비밀번호", type="password", key="find_pw_input").strip()
                 find_team = st.text_input("조 이름", key="find_team_name_id").strip()
                 if st.button("아이디 찾기", key="find_id_btn"):
                     found = None
-                    for uid, uinfo in _db["users_master"].items():
+                    for uid, uinfo in meta_db["users_master"].items():
                         if uinfo["pw"] == find_pw:
                             t_info = _db["teams_master"].get(uinfo["team_id"], {})
                             if t_info.get("team_name", "").strip() == find_team:
