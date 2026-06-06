@@ -298,9 +298,14 @@ elif st.session_state.step == "auth_login":
                 else:
                     st.error("아이디 또는 비밀번호가 잘못되었습니다.")
         with col_l2:
-            if st.button("새 팀 개설 (조장 가입)", use_container_width=True):
-                st.session_state.step = "auth_register"
-                st.rerun()
+            _db_sec = load_all_data()
+            _team_lock = _db_sec["admin_master"].get("security_settings", {}).get("new_team_lock", False)
+            if _team_lock:
+                st.button("🔒 팀 등록 잠김 (관리자 설정)", use_container_width=True, disabled=True)
+            else:
+                if st.button("새 팀 개설 (조장 가입)", use_container_width=True):
+                    st.session_state.step = "auth_register"
+                    st.rerun()
 
         st.write("---")
         with st.expander("🔍 ID / 비밀번호 찾기"):
@@ -508,16 +513,17 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
     st.write("---")
 
     admin_tabs = st.tabs([
-        "📊 전체 현황",
-        "👥 팀 관리",
-        "🗂️ 팀 직접 편집",
-        "🚨 SOS 수신함",
-        "📢 전사 공지",
-        "📈 활동 분석",
-        "🧹 데이터 관리",
-        "💾 용량 관리",
-        "📋 활동 로그",
-        "⚙️ 보안 설정"
+        "📊 전체 현황",       # 0
+        "👥 팀 관리",          # 1
+        "🗂️ 팀 직접 편집",    # 2
+        "🚨 SOS 수신함",       # 3
+        "📢 전사 공지",        # 4
+        "📈 활동 분석",        # 5
+        "🧹 데이터 관리",      # 6
+        "💾 용량 관리",        # 7
+        "🔍 채팅 모니터링",    # 8  ← 신규 (활동 로그 대체)
+        "📋 활동 로그",        # 9  ← 신규 구현
+        "⚙️ 보안 설정"         # 10 ← 신규 구현
     ])
 
     # --- 관리자 탭 0: 전체 현황 대시보드 ---
@@ -619,6 +625,12 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                     if new_pw.strip():
                         _db2 = load_all_data()
                         _db2["users_master"][target_leader]["pw"] = new_pw.strip()
+                        _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "admin": st.session_state.current_user,
+                            "action": f"비밀번호 강제 변경",
+                            "target": target_leader
+                        })
                         save_all_data(_db2)
                         st.success(f"✅ [{target_leader}] 비밀번호가 변경되었습니다.")
                         st.rerun()
@@ -961,8 +973,15 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                 if st.button("🗑️ 팀 완전 삭제", use_container_width=True):
                     if confirm_del:
                         _db2 = load_all_data()
+                        team_name_del = _db2["teams_master"].get(mgmt_tid, {}).get("team_name", mgmt_tid)
                         _db2["users_master"].pop(mgmt_lid, None)
                         _db2["teams_master"].pop(mgmt_tid, None)
+                        _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "admin": st.session_state.current_user,
+                            "action": f"팀 완전 삭제",
+                            "target": f"{team_name_del} (조장: {mgmt_lid})"
+                        })
                         save_all_data(_db2)
                         st.success("✅ 삭제 완료")
                         st.rerun()
@@ -981,37 +1000,447 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                     st.success("✅ 정리 완료")
                     st.rerun()
 
-    # --- 관리자 탭 7: 보안 설정 ---
+    # --- 관리자 탭 7: 용량 관리 ---
     with admin_tabs[7]:
-        st.subheader("⚙️ 마스터 계정 설정")
+        st.subheader("💾 DB 용량 관리")
+        _db = load_all_data()
+        size = estimate_db_size(_db)
+        pct = min(size / SUPABASE_LIMIT_BYTES * 100, 100)
+        bar_color = "#e74c3c" if pct > 85 else "#f39c12" if pct > 60 else "#2ecc71"
+        st.markdown(f"""
+        <div style="background:#1e1e1e;border-radius:8px;padding:16px;margin-bottom:12px;">
+          <b>현재 DB 사용량:</b> {db_size_label(size)} / {db_size_label(SUPABASE_LIMIT_BYTES)}
+          <div style="background:#333;border-radius:4px;height:16px;margin-top:8px;">
+            <div style="background:{bar_color};width:{pct:.1f}%;height:16px;border-radius:4px;"></div>
+          </div>
+          <small style="color:gray;">{pct:.1f}% 사용 중</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if pct > 85:
+            st.error("🚨 DB 용량이 위험 수준입니다. 즉시 정리가 필요합니다.")
+        elif pct > 60:
+            st.warning("⚠️ DB 용량이 60%를 넘었습니다. 미디어/채팅 정리를 권장합니다.")
+
+        st.write("---")
+        col_cap1, col_cap2 = st.columns(2)
+        with col_cap1:
+            st.markdown("#### ⚙️ 용량 제한 설정")
+            st.caption("변경 사항은 코드 상단 상수값을 수정해야 영구 적용됩니다.")
+            st.info(f"""
+            현재 설정:
+            - 이미지 최대: {MAX_IMAGE_KB}KB
+            - 채팅 보관: 방당 {MAX_CHAT_MSGS}개
+            - 스토리 보관: 팀당 {MAX_STORIES}개
+            - 공지 보관: 팀당 {MAX_NOTICES}개
+            """)
+
+        with col_cap2:
+            st.markdown("#### 🧹 자동 트림 실행")
+            st.caption("오래된 데이터를 설정 한도에 맞게 자동으로 정리합니다.")
+            if st.button("🔄 자동 트림 즉시 실행", use_container_width=True, type="primary"):
+                _db2 = load_all_data()
+                before = estimate_db_size(_db2)
+                _db2 = auto_trim_db(_db2)
+                after = estimate_db_size(_db2)
+                save_all_data(_db2)
+                freed = before - after
+                st.success(f"✅ 완료! {db_size_label(freed)} 절약됨 ({db_size_label(before)} → {db_size_label(after)})")
+                st.rerun()
+
+        st.write("---")
+        st.markdown("#### 📊 팀별 용량 점유율")
+        size_rows = []
+        for l_id, u_info in _db.get("users_master", {}).items():
+            t_id = u_info["team_id"]
+            t_info = _db["teams_master"].get(t_id, {})
+            t_size = estimate_db_size(t_info)
+            chat_size = estimate_db_size({"c": t_info.get("chats_archive", [])})
+            story_size = estimate_db_size({"s": t_info.get("stories", [])})
+            size_rows.append({
+                "조 이름": t_info.get("team_name", "설정중"),
+                "전체": db_size_label(t_size),
+                "채팅": db_size_label(chat_size),
+                "스토리": db_size_label(story_size),
+                "채팅 수": len(t_info.get("chats_archive", [])),
+                "스토리 수": len(t_info.get("stories", [])),
+                "바이트": t_size
+            })
+        if size_rows:
+            size_df = pd.DataFrame(size_rows).sort_values("바이트", ascending=False).drop(columns="바이트")
+            st.dataframe(size_df, use_container_width=True)
+
+    # =========================================================
+    # --- 관리자 탭 8: 채팅 모니터링 (DM 감시 + 욕설 탐지) ---
+    # =========================================================
+    with admin_tabs[8]:
+        st.subheader("🔍 채팅 모니터링 센터")
+        st.caption("모든 팀의 채팅방 대화 내용을 열람하고 욕설/불량 키워드를 탐지합니다.")
+
+        # 욕설/불량 키워드 목록 (관리자가 편집 가능)
+        _db = load_all_data()
+        default_bad_words = _db["admin_master"].get("bad_words",
+            ["욕설1", "욕설2", "병신", "씨발", "개새끼", "지랄", "ㅅㅂ", "ㅂㅅ", "새끼", "미친놈", "꺼져"])
+
+        with st.expander("⚙️ 욕설 키워드 목록 편집", expanded=False):
+            bad_words_input = st.text_area(
+                "탐지할 단어/구문 목록 (쉼표로 구분)",
+                value=", ".join(default_bad_words),
+                key="bad_words_editor"
+            )
+            if st.button("💾 키워드 저장", key="save_bad_words"):
+                new_bw = [w.strip() for w in bad_words_input.split(",") if w.strip()]
+                _db2 = load_all_data()
+                _db2["admin_master"]["bad_words"] = new_bw
+                save_all_data(_db2)
+                st.success(f"✅ {len(new_bw)}개 키워드 저장 완료")
+                st.rerun()
+
+        def detect_bad_words(text: str, bad_words: list) -> list:
+            found = []
+            t_lower = text.lower()
+            for w in bad_words:
+                if w.lower() in t_lower:
+                    found.append(w)
+            return found
+
+        st.write("---")
+        col_mon1, col_mon2 = st.columns([1, 2])
+
+        # 팀/방 선택
+        with col_mon1:
+            st.markdown("#### 🏢 팀 선택")
+            if not _db["users_master"]:
+                st.info("등록된 팀이 없습니다.")
+            else:
+                mon_team_opts = {}
+                for l_id, u_info in _db["users_master"].items():
+                    t_id = u_info["team_id"]
+                    t_info = _db["teams_master"].get(t_id, {})
+                    lbl = f"{t_info.get('team_name','설정중')} ({l_id})"
+                    mon_team_opts[lbl] = t_id
+
+                sel_mon_team = st.selectbox("팀 선택", list(mon_team_opts.keys()), key="mon_team_sel")
+                mon_t_id = mon_team_opts[sel_mon_team]
+                mon_team_data = _db["teams_master"].get(mon_t_id, {})
+
+                rooms = mon_team_data.get("chat_rooms", [])
+                if rooms:
+                    room_opts = {f"💬 {r['title']} ({len(r['members'])}명)": r["room_id"] for r in rooms}
+                    sel_room_label = st.selectbox("채팅방 선택", ["전체 대화 보기"] + list(room_opts.keys()), key="mon_room_sel")
+                else:
+                    sel_room_label = "전체 대화 보기"
+
+                # 욕설 탐지 요약
+                st.write("---")
+                st.markdown("#### 🚨 욕설 탐지 요약")
+                all_chats = mon_team_data.get("chats_archive", [])
+                flagged = []
+                for c in all_chats:
+                    hits = detect_bad_words(c.get("msg",""), default_bad_words)
+                    if hits:
+                        flagged.append({
+                            "보낸사람": c.get("sender","?"),
+                            "메시지": c.get("msg","")[:40],
+                            "탐지어": ", ".join(hits),
+                            "시간": c.get("time",""),
+                            "날짜": c.get("date",""),
+                        })
+                if flagged:
+                    st.error(f"🚨 총 **{len(flagged)}개** 불량 메시지 탐지됨")
+                    flag_df = pd.DataFrame(flagged)
+                    st.dataframe(flag_df, use_container_width=True)
+
+                    # 욕설 사용자 랭킹
+                    flag_sender = {}
+                    for f in flagged:
+                        flag_sender[f["보낸사람"]] = flag_sender.get(f["보낸사람"], 0) + 1
+                    rank_df = pd.DataFrame(list(flag_sender.items()), columns=["조원", "탐지 횟수"]).sort_values("탐지 횟수", ascending=False)
+                    st.markdown("**욕설 사용자 순위:**")
+                    st.dataframe(rank_df, use_container_width=True)
+
+                    if st.button("🗑️ 탐지된 욕설 메시지 전체 삭제", key="del_bad_msgs", type="primary"):
+                        _db2 = load_all_data()
+                        t2 = _db2["teams_master"][mon_t_id]
+                        bw_lower = [w.lower() for w in default_bad_words]
+                        t2["chats_archive"] = [
+                            c for c in t2.get("chats_archive", [])
+                            if not any(w in c.get("msg","").lower() for w in bw_lower)
+                        ]
+                        # 활동 로그에 기록
+                        _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
+                            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "admin": st.session_state.current_user,
+                            "action": f"욕설 메시지 {len(flagged)}건 삭제",
+                            "target": mon_team_data.get("team_name", mon_t_id)
+                        })
+                        save_all_data(_db2)
+                        st.success(f"✅ {len(flagged)}개 메시지 삭제 완료")
+                        st.rerun()
+                else:
+                    st.success("✅ 탐지된 욕설 없음")
+
+        with col_mon2:
+            st.markdown("#### 💬 채팅 내용 열람")
+            if not _db["users_master"]:
+                st.stop()
+
+            all_chats_view = mon_team_data.get("chats_archive", [])
+
+            # 방 필터
+            if sel_room_label != "전체 대화 보기" and rooms:
+                sel_room_id = room_opts[sel_room_label]
+                filtered_chats = [c for c in all_chats_view if c.get("room_id") == sel_room_id]
+            else:
+                filtered_chats = all_chats_view
+
+            # 키워드 검색
+            search_kw = st.text_input("🔎 키워드 검색", placeholder="특정 단어 검색...", key="chat_search_kw")
+            if search_kw.strip():
+                filtered_chats = [c for c in filtered_chats if search_kw.lower() in c.get("msg","").lower()]
+
+            # 발신자 필터
+            senders = list(set(c.get("sender","?") for c in all_chats_view))
+            sel_sender = st.selectbox("발신자 필터", ["전체"] + senders, key="chat_sender_filter")
+            if sel_sender != "전체":
+                filtered_chats = [c for c in filtered_chats if c.get("sender") == sel_sender]
+
+            st.caption(f"총 {len(filtered_chats)}개 메시지")
+
+            chat_container = st.container(height=480)
+            with chat_container:
+                if not filtered_chats:
+                    st.caption("표시할 메시지가 없습니다.")
+                else:
+                    for i, c in enumerate(reversed(filtered_chats[-100:])):
+                        bad_hits = detect_bad_words(c.get("msg",""), default_bad_words)
+                        bg = "#fff0f0" if bad_hits else "#f9f9f9"
+                        border = "2px solid #e74c3c" if bad_hits else "1px solid #ddd"
+                        flag_icon = "🚨 " if bad_hits else ""
+                        # 어느 방인지 표시
+                        room_name = "?"
+                        for r in rooms:
+                            if r["room_id"] == c.get("room_id"):
+                                room_name = r["title"]
+                                break
+                        st.markdown(
+                            f"<div style='background:{bg};border:{border};border-radius:8px;padding:8px 12px;margin-bottom:6px;'>"
+                            f"<b>{flag_icon}{c.get('sender','?')}</b> "
+                            f"<small style='color:#888;'>[ {room_name} · {c.get('date','')} {c.get('time','')} ]</small><br>"
+                            f"{c.get('msg','')}"
+                            + (f"<br><small style='color:#e74c3c;'>⚠️ 탐지어: {', '.join(bad_hits)}</small>" if bad_hits else "")
+                            + "</div>",
+                            unsafe_allow_html=True
+                        )
+                        # 메시지 단건 삭제 (관리자 권한)
+                        if st.button("🗑️ 삭제", key=f"del_msg_{i}_{c.get('time','')}_{c.get('sender','')}"):
+                            _db2 = load_all_data()
+                            t2_chats = _db2["teams_master"][mon_t_id].get("chats_archive", [])
+                            # 발신자+시간+내용으로 매칭 삭제
+                            _db2["teams_master"][mon_t_id]["chats_archive"] = [
+                                x for x in t2_chats
+                                if not (x.get("sender") == c.get("sender") and
+                                        x.get("time") == c.get("time") and
+                                        x.get("msg") == c.get("msg"))
+                            ]
+                            _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
+                                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                                "admin": st.session_state.current_user,
+                                "action": f"메시지 강제 삭제: [{c.get('sender')}] {c.get('msg','')[:30]}",
+                                "target": mon_team_data.get("team_name", mon_t_id)
+                            })
+                            save_all_data(_db2)
+                            st.rerun()
+
+    # =============================================
+    # --- 관리자 탭 9: 활동 로그 ---
+    # =============================================
+    with admin_tabs[9]:
+        st.subheader("📋 관리자 활동 로그")
+        st.caption("관리자가 수행한 모든 작업 이력이 자동으로 기록됩니다.")
+
+        _db = load_all_data()
+        logs = _db["admin_master"].get("activity_logs", [])
+
+        col_log1, col_log2 = st.columns([3, 1])
+        with col_log1:
+            log_filter = st.text_input("🔎 로그 검색", placeholder="작업 내용, 대상 팀 등", key="log_search")
+        with col_log2:
+            if st.button("🗑️ 로그 전체 삭제", key="clear_logs_btn"):
+                _db2 = load_all_data()
+                _db2["admin_master"]["activity_logs"] = []
+                save_all_data(_db2)
+                st.rerun()
+
+        filtered_logs = logs
+        if log_filter.strip():
+            filtered_logs = [
+                l for l in logs
+                if log_filter.lower() in l.get("action","").lower()
+                or log_filter.lower() in l.get("target","").lower()
+            ]
+
+        if not filtered_logs:
+            st.info("📋 기록된 활동 로그가 없습니다." if not logs else "검색 결과가 없습니다.")
+        else:
+            st.caption(f"총 {len(filtered_logs)}건 (전체 {len(logs)}건)")
+
+            # 통계
+            if logs:
+                action_types = {}
+                for l in logs:
+                    a = l.get("action","")[:20]
+                    action_types[a] = action_types.get(a, 0) + 1
+                top3 = sorted(action_types.items(), key=lambda x: x[1], reverse=True)[:3]
+                cols_stat = st.columns(3)
+                for i, (act, cnt) in enumerate(top3):
+                    cols_stat[i].metric(act, f"{cnt}회")
+                st.write("---")
+
+            for l in filtered_logs[:100]:  # 최근 100건
+                with st.container(border=True):
+                    c_l1, c_l2 = st.columns([4, 1])
+                    with c_l1:
+                        st.markdown(f"**{l.get('action','?')}**")
+                        st.caption(f"👤 관리자: {l.get('admin','?')} | 🎯 대상: {l.get('target','?')} | 🕐 {l.get('time','?')}")
+                    with c_l2:
+                        action_text = l.get("action","")
+                        if "삭제" in action_text:
+                            st.error("삭제")
+                        elif "변경" in action_text or "저장" in action_text:
+                            st.warning("수정")
+                        elif "발송" in action_text or "전송" in action_text:
+                            st.info("발송")
+                        else:
+                            st.success("기타")
+
+    # =============================================
+    # --- 관리자 탭 10: 보안 설정 ---
+    # =============================================
+    with admin_tabs[10]:
+        st.subheader("⚙️ 보안 및 시스템 설정")
+
         _db = load_all_data()
 
+        # 관리자 계정 변경
+        st.markdown("#### 🔑 관리자 계정 변경")
         with st.form("admin_profile_form"):
             new_ad_id = st.text_input("새 관리자 ID", value=_db["admin_master"]["admin_id"]).strip()
             new_ad_pw = st.text_input("새 관리자 비밀번호", value=_db["admin_master"]["admin_pw"], type="password").strip()
+            new_ad_pw2 = st.text_input("새 비밀번호 확인", type="password").strip()
             if st.form_submit_button("💾 계정 정보 변경"):
-                if new_ad_id and new_ad_pw:
-                    _db["admin_master"]["admin_id"] = new_ad_id
-                    _db["admin_master"]["admin_pw"] = new_ad_pw
-                    save_all_data(_db)
-                    st.success("✅ 관리자 계정이 변경되었습니다.")
+                if not (new_ad_id and new_ad_pw):
+                    st.error("ID와 비밀번호를 모두 입력하세요.")
+                elif new_ad_pw != new_ad_pw2:
+                    st.error("비밀번호가 일치하지 않습니다.")
+                else:
+                    _db2 = load_all_data()
+                    _db2["admin_master"]["admin_id"] = new_ad_id
+                    _db2["admin_master"]["admin_pw"] = new_ad_pw
+                    _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "admin": st.session_state.current_user,
+                        "action": "관리자 계정 정보 변경",
+                        "target": "시스템"
+                    })
+                    save_all_data(_db2)
+                    st.success("✅ 관리자 계정이 변경되었습니다. 다음 로그인부터 적용됩니다.")
                     st.rerun()
 
         st.write("---")
+        st.markdown("#### 🛡️ 보안 정책 설정")
+
+        sec_settings = _db["admin_master"].get("security_settings", {})
+        col_sec1, col_sec2 = st.columns(2)
+        with col_sec1:
+            auto_kick_days = st.number_input(
+                "비활성 팀 자동 경고 기간 (일)",
+                min_value=7, max_value=365, value=sec_settings.get("auto_kick_days", 30),
+                help="마지막 활동으로부터 이 기간이 지나면 현황 대시보드에 경고 표시"
+            )
+            max_login_attempts = st.number_input(
+                "로그인 허용 최대 조원 수 (팀당)",
+                min_value=1, max_value=50, value=sec_settings.get("max_members", 20),
+                help="한 팀에 등록 가능한 최대 조원 수"
+            )
+        with col_sec2:
+            chat_monitor_on = st.toggle(
+                "💬 욕설 자동 탐지 알림",
+                value=sec_settings.get("chat_monitor_on", True),
+                help="새 욕설 메시지가 탐지되면 현황 대시보드에 경고 배너 표시"
+            )
+            new_team_approval = st.toggle(
+                "🔒 신규 팀 등록 잠금",
+                value=sec_settings.get("new_team_lock", False),
+                help="ON 시 새로운 팀 등록(조장 가입)이 차단됩니다"
+            )
+
+        if st.button("💾 보안 정책 저장", type="primary"):
+            _db2 = load_all_data()
+            _db2["admin_master"]["security_settings"] = {
+                "auto_kick_days": auto_kick_days,
+                "max_members": max_login_attempts,
+                "chat_monitor_on": chat_monitor_on,
+                "new_team_lock": new_team_approval,
+            }
+            _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "admin": st.session_state.current_user,
+                "action": "보안 정책 설정 변경",
+                "target": "시스템"
+            })
+            save_all_data(_db2)
+            st.success("✅ 보안 정책이 저장되었습니다.")
+            st.rerun()
+
+        st.write("---")
+        st.markdown("#### 📊 접속 통계")
+        # 각 팀의 최근 활동 시각 파악
+        stat_rows = []
+        for l_id, u_info in _db.get("users_master", {}).items():
+            t_id = u_info["team_id"]
+            t_info = _db["teams_master"].get(t_id, {})
+            chats = t_info.get("chats_archive", [])
+            stories = t_info.get("stories", [])
+            last_active = "활동 없음"
+            all_times = []
+            for c in chats:
+                if c.get("date") and c.get("time"):
+                    all_times.append(f"{c['date']} {c['time']}")
+            for s in stories:
+                if s.get("time"):
+                    all_times.append(s["time"])
+            if all_times:
+                last_active = max(all_times)
+            stat_rows.append({
+                "조 이름": t_info.get("team_name","설정중"),
+                "조장 ID": l_id,
+                "마지막 활동": last_active,
+                "채팅 수": len(chats),
+                "스토리 수": len(stories),
+            })
+        if stat_rows:
+            stat_df = pd.DataFrame(stat_rows).sort_values("마지막 활동", ascending=False)
+            st.dataframe(stat_df, use_container_width=True)
+
+        st.write("---")
         st.error("☣️ 위험 구역 — DB 전체 포맷")
-        st.caption("이 버튼을 누르면 모든 팀 데이터가 영구 삭제됩니다.")
+        st.caption("이 버튼을 누르면 **모든** 팀 데이터가 영구 삭제됩니다.")
         confirm_fmt = st.checkbox("모든 책임을 지며 DB를 전체 포맷하겠습니다.")
-        if st.button("⚠️ DB 전체 포맷"):
+        if st.button("⚠️ DB 전체 포맷 실행"):
             if confirm_fmt:
-                _db = load_all_data()
+                _db2 = load_all_data()
                 reset_db = {
                     "users_master": {},
                     "teams_master": {},
                     "admin_master": {
-                        "admin_id": _db["admin_master"]["admin_id"],
-                        "admin_pw": _db["admin_master"]["admin_pw"],
+                        "admin_id": _db2["admin_master"]["admin_id"],
+                        "admin_pw": _db2["admin_master"]["admin_pw"],
                         "system_notices": [],
-                        "bug_reports": []
+                        "bug_reports": [],
+                        "activity_logs": [],
+                        "bad_words": default_bad_words if "_db" not in dir() else _db2["admin_master"].get("bad_words", []),
+                        "security_settings": _db2["admin_master"].get("security_settings", {}),
                     }
                 }
                 save_all_data(reset_db)
@@ -1691,24 +2120,73 @@ else:
                                 last_date = chat_date
                             is_me = (chat["sender"] == my_chat_name)
                             time_label = chat["time"]
+                            attach_html = ""
+                            if chat.get("file_name") and chat.get("file_name") != "없음":
+                                attach_html = f"<br>📎 <i>{chat['file_name']}</i>"
                             if is_me:
-                                st.markdown(f"<div style='text-align:right;margin-bottom:6px;'><span style='background:#ffe600;color:black;padding:5px 10px;border-radius:12px;display:inline-block;max-width:70%;text-align:left;'><b>나 ({my_chat_name})</b><br>{chat['msg']}<br><small style='color:gray;font-size:10px;'>{time_label}</small></span></div>", unsafe_allow_html=True)
+                                st.markdown(
+                                    f"<div style='text-align:right;margin-bottom:6px;'>"
+                                    f"<span style='background:#ffe600;color:black;padding:5px 10px;border-radius:12px;display:inline-block;max-width:70%;text-align:left;'>"
+                                    f"<b>나 ({my_chat_name})</b><br>{chat['msg']}{attach_html}"
+                                    f"<br><small style='color:gray;font-size:10px;'>{time_label}</small></span></div>",
+                                    unsafe_allow_html=True
+                                )
                             else:
-                                st.markdown(f"<div style='text-align:left;margin-bottom:6px;'><span style='background:#f1f1f1;color:black;padding:5px 10px;border-radius:12px;display:inline-block;max-width:70%;'><b>{chat['sender']}</b><br>{chat['msg']}<br><small style='color:gray;font-size:10px;'>{time_label}</small></span></div>", unsafe_allow_html=True)
+                                st.markdown(
+                                    f"<div style='text-align:left;margin-bottom:6px;'>"
+                                    f"<span style='background:#f1f1f1;color:black;padding:5px 10px;border-radius:12px;display:inline-block;max-width:70%;'>"
+                                    f"<b>{chat['sender']}</b><br>{chat['msg']}{attach_html}"
+                                    f"<br><small style='color:gray;font-size:10px;'>{time_label}</small></span></div>",
+                                    unsafe_allow_html=True
+                                )
+                            # 첨부파일 다운로드 버튼 (이미지면 인라인 표시)
+                            if chat.get("file_bytes") and chat.get("file_name") and chat["file_name"] != "없음":
+                                raw_file = base64.b64decode(chat["file_bytes"]) if isinstance(chat["file_bytes"], str) else chat["file_bytes"]
+                                fname_lower = chat["file_name"].lower()
+                                if any(fname_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
+                                    st.image(raw_file, caption=chat["file_name"], width=240)
+                                else:
+                                    st.download_button(
+                                        f"📥 {chat['file_name']} 다운로드",
+                                        data=raw_file,
+                                        file_name=chat["file_name"],
+                                        key=f"dl_{chat.get('time','')}_{chat.get('sender','')}_{chat.get('file_name','')}"
+                                    )
 
                     with st.form(f"chat_form_{target_room['room_id']}", clear_on_submit=True):
                         msg_in = st.text_input("메시지 입력", placeholder="메시지를 입력하세요")
-                        if st.form_submit_button("전송 →") and msg_in.strip():
-                            _db2 = load_all_data()
-                            _db2["teams_master"][st.session_state.current_team_id].setdefault("chats_archive", []).append({
-                                "room_id": target_room["room_id"],
-                                "sender": my_chat_name,
-                                "msg": msg_in.strip(),
-                                "time": datetime.now().strftime("%H:%M"),
-                                "date": datetime.now().strftime("%Y-%m-%d")
-                            })
-                            save_all_data(_db2)
-                            st.rerun()
+                        chat_file = st.file_uploader(
+                            "📎 파일 첨부 (선택, 최대 800KB)",
+                            type=["png", "jpg", "jpeg", "gif", "pdf", "docx", "xlsx", "pptx", "txt", "zip", "mp3", "wav"],
+                            key=f"chat_file_{target_room['room_id']}"
+                        )
+                        if st.form_submit_button("전송 →"):
+                            if msg_in.strip() or chat_file is not None:
+                                file_b64 = None
+                                file_name = "없음"
+                                if chat_file is not None:
+                                    raw_chat_file = chat_file.read()
+                                    if len(raw_chat_file) / 1024 > MAX_FILE_KB:
+                                        st.error(f"❌ 파일 크기가 {MAX_FILE_KB}KB를 초과합니다.")
+                                    else:
+                                        # 이미지는 압축 후 저장
+                                        if chat_file.name.lower().endswith((".png", ".jpg", ".jpeg")):
+                                            file_b64 = compress_image_b64(raw_chat_file, MAX_IMAGE_KB)
+                                        else:
+                                            file_b64 = base64.b64encode(raw_chat_file).decode("utf-8")
+                                        file_name = chat_file.name
+                                _db2 = load_all_data()
+                                _db2["teams_master"][st.session_state.current_team_id].setdefault("chats_archive", []).append({
+                                    "room_id": target_room["room_id"],
+                                    "sender": my_chat_name,
+                                    "msg": msg_in.strip() if msg_in.strip() else f"📎 파일 전송: {file_name}",
+                                    "time": datetime.now().strftime("%H:%M"),
+                                    "date": datetime.now().strftime("%Y-%m-%d"),
+                                    "file_name": file_name,
+                                    "file_bytes": file_b64,
+                                })
+                                save_all_data(_db2)
+                                st.rerun()
 
         show_chat_live()
 
