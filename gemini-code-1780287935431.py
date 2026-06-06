@@ -9,6 +9,48 @@ from datetime import datetime, timedelta, date as date_type
 st.set_page_config(page_title="스타트리 (Startree)", page_icon="🌳", layout="wide")
 
 # =============================================
+# [용량 최적화 유틸리티]
+# =============================================
+MAX_IMAGE_KB = 300      # 이미지 최대 300KB (base64 후 ~400KB)
+MAX_VIDEO_KB = 3000     # 영상 최대 3MB
+MAX_AUDIO_KB = 2000     # 음성 최대 2MB
+MAX_FILE_KB   = 1000    # 첨부파일 최대 1MB
+MAX_CHAT_MSGS = 200     # 채팅방당 최대 보관 메시지
+MAX_STORIES   = 30      # 팀당 최대 스토리 수
+
+def compress_image_b64(raw_bytes: bytes, max_kb: int = MAX_IMAGE_KB) -> str:
+    """PIL로 이미지를 리사이즈·압축 후 base64 반환. PIL 없으면 그냥 b64 반환."""
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(raw_bytes))
+        # EXIF 회전 보정
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        # RGBA → RGB 변환 (JPEG 저장 위해)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        # 가로 최대 1200px 리사이즈
+        if img.width > 1200:
+            ratio = 1200 / img.width
+            img = img.resize((1200, int(img.height * ratio)), Image.LANCZOS)
+        # 품질 조절로 max_kb 이하 맞추기
+        quality = 85
+        while quality >= 40:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            if buf.tell() <= max_kb * 1024:
+                break
+            quality -= 10
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception:
+        # PIL 없거나 오류 시 그냥 인코딩
+        return base64.b64encode(raw_bytes).decode("utf-8")
+
+# =============================================
 # [Supabase 연결]
 # .streamlit/secrets.toml 설정:
 # [supabase]
@@ -1016,8 +1058,16 @@ else:
                         file_name = "없음"
                         file_b64 = None
                         if uploaded_file:
+                            raw_f = uploaded_file.read()
+                            if len(raw_f) / 1024 > MAX_FILE_KB:
+                                st.error(f"❌ 첨부파일이 너무 큽니다. {MAX_FILE_KB//1024}MB 이하만 업로드 가능합니다.")
+                                st.stop()
+                            fname_lower = uploaded_file.name.lower()
+                            if fname_lower.endswith((".png", ".jpg", ".jpeg")):
+                                file_b64 = compress_image_b64(raw_f)
+                            else:
+                                file_b64 = base64.b64encode(raw_f).decode("utf-8")
                             file_name = uploaded_file.name
-                            file_b64 = base64.b64encode(uploaded_file.read()).decode("utf-8")
                         _db2 = load_all_data()
                         _db2["teams_master"][st.session_state.current_team_id].setdefault("notices", []).insert(0, {
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -1089,17 +1139,28 @@ else:
                     media_data = None
                     if st_media:
                         raw = st_media.read()
-                        # 이미지만 base64, 나머지는 크기 제한 안내
-                        if st_media.name.lower().endswith((".png", ".jpg", ".jpeg")):
+                        fname = st_media.name.lower()
+                        size_kb = len(raw) / 1024
+                        if fname.endswith((".png", ".jpg", ".jpeg")):
                             media_type = "image"
-                            media_data = base64.b64encode(raw).decode("utf-8")
-                        elif st_media.name.lower().endswith(".mp4"):
+                            media_data = compress_image_b64(raw)  # 자동 압축
+                        elif fname.endswith(".mp4"):
+                            if size_kb > MAX_VIDEO_KB:
+                                st.error(f"❌ 영상 파일이 너무 큽니다. {MAX_VIDEO_KB//1000}MB 이하만 업로드 가능합니다.")
+                                st.stop()
                             media_type = "video"
                             media_data = base64.b64encode(raw).decode("utf-8")
-                        elif st_media.name.lower().endswith((".mp3", ".wav")):
+                        elif fname.endswith((".mp3", ".wav")):
+                            if size_kb > MAX_AUDIO_KB:
+                                st.error(f"❌ 음성 파일이 너무 큽니다. {MAX_AUDIO_KB//1000}MB 이하만 업로드 가능합니다.")
+                                st.stop()
                             media_type = "audio"
                             media_data = base64.b64encode(raw).decode("utf-8")
                     _db2 = load_all_data()
+                    # 스토리 최대 개수 초과 시 오래된 것 자동 삭제
+                    stories_list = _db2["teams_master"][st.session_state.current_team_id].setdefault("stories", [])
+                    if len(stories_list) >= MAX_STORIES:
+                        stories_list.pop()  # 가장 오래된 스토리 제거
                     _db2["teams_master"][st.session_state.current_team_id].setdefault("stories", []).insert(0, {
                         "story_id": str(uuid.uuid4()),
                         "user": my_chat_name,
@@ -1515,11 +1576,12 @@ else:
 
         st.write("---")
 
-        @st.fragment(run_every=8)
+        @st.fragment(run_every=4)
         def show_chat_live():
             fresh = load_all_data()
             fresh_team = fresh["teams_master"].get(st.session_state.current_team_id, {})
             my_rooms = [r for r in fresh_team.get("chat_rooms", []) if my_chat_name in r.get("members", [])]
+            all_chats = fresh_team.get("chats_archive", [])
 
             col_rooms, col_chat = st.columns([1, 2])
 
@@ -1529,8 +1591,12 @@ else:
                     st.caption("참여 중인 채팅방이 없습니다.")
                 for rm in my_rooms:
                     is_active = (st.session_state.active_chat_room_id == rm["room_id"])
-                    # 미읽 메시지 수 (간단히 표시)
-                    label = f"{'🟢 ' if is_active else '💬 '}{rm['title']} ({len(rm['members'])}명)"
+                    # 해당 방의 최근 메시지 미리보기
+                    room_msgs = [c for c in all_chats if c.get("room_id") == rm["room_id"]]
+                    last_msg = f" · {room_msgs[-1]['msg'][:10]}..." if room_msgs else ""
+                    unread_count = sum(1 for c in room_msgs[-20:] if c.get("sender") != my_chat_name)
+                    badge = f" 🔴{unread_count}" if unread_count > 0 and not is_active else ""
+                    label = f"{'🟢 ' if is_active else '💬 '}{rm['title']} ({len(rm['members'])}명){badge}"
                     if st.button(label, key=f"room_{rm['room_id']}", use_container_width=True,
                                  type="primary" if is_active else "secondary"):
                         st.session_state.active_chat_room_id = rm["room_id"]
@@ -1571,7 +1637,11 @@ else:
 
                     msg_box = st.container(height=350)
                     with msg_box:
-                        room_msgs = [c for c in fresh_team.get("chats_archive", []) if c.get("room_id") == target_room["room_id"]]
+                        room_msgs_all = [c for c in fresh_team.get("chats_archive", []) if c.get("room_id") == target_room["room_id"]]
+                        # 최근 50개만 렌더링 (랙 방지)
+                        room_msgs = room_msgs_all[-50:]
+                        if len(room_msgs_all) > 50:
+                            st.caption(f"💬 최근 50개 메시지 표시 중 (전체 {len(room_msgs_all)}개)")
                         last_date = None
                         for chat in room_msgs:
                             chat_date = chat.get("date", "")
