@@ -664,14 +664,16 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
             st.rerun()
 
         _db = get_cached_meta()
+        # get_all_teams() 를 딱 1번만 호출해 변수에 저장 → 이전엔 4번 호출로 쿼리 낭비
+        _all_teams = get_all_teams()
         total_teams = len(_db["users_master"])
-        total_members = sum(len(v.get("members", [])) for v in get_all_teams().values())
-        total_bugs = len(_db["admin_master"].get("bug_reports", []))
-        pending_bugs = len([r for r in _db["admin_master"].get("bug_reports", []) if r["status"] != "✔️ 처리완료"])
-        total_notices = len(_db["admin_master"].get("system_notices", []))
-        total_chats = sum(len(v.get("chats_archive", [])) for v in get_all_teams().values())
-        total_stories = sum(len(v.get("stories", [])) for v in get_all_teams().values())
-        total_calendar = sum(sum(len(ev) for ev in v.get("calendar_events", {}).values()) for v in get_all_teams().values())
+        total_members  = sum(len(v.get("members", []))       for v in _all_teams.values())
+        total_bugs     = len(_db["admin_master"].get("bug_reports", []))
+        pending_bugs   = len([r for r in _db["admin_master"].get("bug_reports", []) if r["status"] != "✔️ 처리완료"])
+        total_notices  = len(_db["admin_master"].get("system_notices", []))
+        total_chats    = sum(len(v.get("chats_archive", []))  for v in _all_teams.values())
+        total_stories  = sum(len(v.get("stories", []))        for v in _all_teams.values())
+        total_calendar = sum(sum(len(ev) for ev in v.get("calendar_events", {}).values()) for v in _all_teams.values())
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("🏢 등록 팀", f"{total_teams}팀")
@@ -696,7 +698,7 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                 rows = []
                 for l_id, u_info in _db["users_master"].items():
                     t_id = u_info["team_id"]
-                    t_info = get_all_teams().get(t_id, {})
+                    t_info = _all_teams.get(t_id, {})   # 위에서 이미 로드한 _all_teams 재사용
                     pending_tasks = sum(
                         1 for evs in t_info.get("calendar_events", {}).values()
                         for ev in evs if "⏳" in ev.get("status", "⏳")
@@ -1664,6 +1666,20 @@ else:
     except Exception:
         pass
 
+    # 팀 활동 스냅샷 카드
+    _snap = get_cached_team(st.session_state.current_team_id)
+    if _snap:
+        snap_chats = len(_snap.get("chats_archive", []))
+        snap_stories = len(_snap.get("stories", []))
+        snap_tasks = sum(len(evs) for evs in _snap.get("calendar_events", {}).values())
+        snap_done = sum(1 for evs in _snap.get("calendar_events", {}).values() for ev in evs if "✔️" in ev.get("status",""))
+        
+        col_snap1, col_snap2, col_snap3, col_snap4 = st.columns(4)
+        col_snap1.metric("💬 채팅", f"{snap_chats}건")
+        col_snap2.metric("✨ 스토리", f"{snap_stories}건")
+        col_snap3.metric("📅 전체 업무", f"{snap_tasks}건")
+        col_snap4.metric("✅ 완료", f"{snap_done}건")
+
     st.write("---")
 
     tab_titles = ["📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
@@ -1904,18 +1920,27 @@ else:
                 st.info("기여도 데이터가 없습니다. 팀 설정을 완료해주세요.")
                 return
 
-            # 랭킹 표시
+            # 랭킹 카드 — 4열씩 행 단위로 끊어서 렌더링 (마지막 행 비대칭 방지)
             ranked = sorted(stocks.items(), key=lambda x: x[1][-1] if x[1] else 0, reverse=True)
-            rank_cols = st.columns(min(len(ranked), 4))
-            for i, (name, vals) in enumerate(ranked):
-                with rank_cols[i % len(rank_cols)]:
-                    cur_val = vals[-1] if vals else 0
-                    logs = fresh_team.get("stock_logs", {}).get(name, [])
-                    rank_emoji = ["🥇", "🥈", "🥉"] + ["🏅"] * 10
-                    with st.container(border=True):
-                        st.markdown(f"{rank_emoji[i]} **{name}**")
-                        st.metric("기여도", f"{cur_val:,}P",
-                                  delta=f"{'+' if logs and logs[-1]['type']=='plus' else '-'}{logs[-1]['val']:,}P" if logs else None)
+            rank_emoji = ["🥇", "🥈", "🥉"] + ["🏅"] * 20
+            COLS_PER_ROW = 4
+            for row_start in range(0, len(ranked), COLS_PER_ROW):
+                row_items = ranked[row_start: row_start + COLS_PER_ROW]
+                # 이 행에 실제 카드 수만큼만 열 생성 → 마지막 행도 균등 폭
+                row_cols = st.columns(len(row_items))
+                for col, (i_abs, (name, vals)) in zip(row_cols, enumerate(row_items, start=row_start)):
+                    with col:
+                        cur_val = vals[-1] if vals else 0
+                        logs = fresh_team.get("stock_logs", {}).get(name, [])
+                        with st.container(border=True):
+                            st.markdown(f"{rank_emoji[i_abs]} **{name}**")
+                            st.metric(
+                                "기여도", f"{cur_val:,}P",
+                                delta=(
+                                    f"{'+' if logs[-1]['type']=='plus' else '-'}{logs[-1]['val']:,}P"
+                                    if logs else None
+                                )
+                            )
 
             st.write("---")
             chart_tabs = st.tabs(["📊 개인 추이", "📈 전체 비교"])
@@ -1934,12 +1959,21 @@ else:
                 max_len = max((len(v) for v in stocks.values()), default=1)
                 compare_data = {}
                 for name, vals in stocks.items():
-                    # 짧은 히스토리는 첫값으로 앞을 채워 길이 맞춤
                     padded = ([vals[0]] * (max_len - len(vals))) + vals if len(vals) < max_len else vals
                     compare_data[name] = padded
                 compare_df = pd.DataFrame(compare_data)
                 compare_df.index.name = "단계"
-                st.line_chart(compare_df)
+                # 조원 6명 초과 시 범례가 겹쳐 보이므로 개인별 차트로 전환
+                if len(stocks) > 6:
+                    st.caption("조원이 많아 개인별 카드로 표시합니다.")
+                    card_cols2 = st.columns(2)
+                    for idx2, (name2, vals2) in enumerate(stocks.items()):
+                        with card_cols2[idx2 % 2]:
+                            mini_df = pd.DataFrame({"기여도(P)": vals2})
+                            st.markdown(f"**{name2}**")
+                            st.line_chart(mini_df, height=140)
+                else:
+                    st.line_chart(compare_df)
                 st.caption("각 선은 조원별 기여도 추이입니다. 결재/반려/수동조정 시 갱신됩니다.")
 
         show_stocks_live()
@@ -2008,6 +2042,31 @@ else:
                 c_p2.metric("✅ 완료", f"{done_ev}건")
                 c_p3.metric("⏳ 대기", f"{pending_ev}건")
                 st.progress(prog, text=f"진행률 {prog*100:.0f}%")
+                
+                # 담당자별 진행률 요약
+                st.markdown("#### 👤 담당자별 진행률")
+                worker_stats = {}
+                for evs in all_cal.values():
+                    for ev in evs:
+                        w = ev.get("worker", "?")
+                        if w not in worker_stats:
+                            worker_stats[w] = {"전체": 0, "완료": 0}
+                        worker_stats[w]["전체"] += 1
+                        if "✔️" in ev.get("status", ""):
+                            worker_stats[w]["완료"] += 1
+                
+                if worker_stats:
+                    ws_rows = []
+                    for w, stat in sorted(worker_stats.items()):
+                        rate = stat["완료"] / stat["전체"] * 100 if stat["전체"] > 0 else 0
+                        ws_rows.append({
+                            "담당자": w,
+                            "전체": f"{stat['전체']}건",
+                            "완료": f"{stat['완료']}건",
+                            "완료율": f"{rate:.0f}%"
+                        })
+                    st.dataframe(pd.DataFrame(ws_rows), use_container_width=True)
+                
                 st.write("---")
 
             for d_str in all_dates:
@@ -2265,12 +2324,29 @@ else:
                             st.rerun()
 
                     msg_box = st.container(height=350)
+                    
+                    # 채팅 검색 필터
+                    col_filter1, col_filter2 = st.columns([2, 3])
+                    with col_filter1:
+                        search_date = st.date_input("📅 날짜 필터 (선택)", value=None, key=f"chat_date_{target_room['room_id']}")
+                    with col_filter2:
+                        search_keyword = st.text_input("🔎 키워드 검색", placeholder="단어 입력", key=f"chat_kw_{target_room['room_id']}")
+                    
                     with msg_box:
                         room_msgs_all = [c for c in fresh_team.get("chats_archive", []) if c.get("room_id") == target_room["room_id"]]
-                        # 최근 50개만 렌더링 (랙 방지)
+                        
+                        # 필터 적용
+                        if search_date:
+                            search_date_str = search_date.strftime("%Y-%m-%d")
+                            room_msgs_all = [c for c in room_msgs_all if c.get("date") == search_date_str]
+                        if search_keyword.strip():
+                            kw_lower = search_keyword.lower()
+                            room_msgs_all = [c for c in room_msgs_all if kw_lower in c.get("msg", "").lower()]
+                        
+                        # 최근 50개만 렌더링
                         room_msgs = room_msgs_all[-50:]
                         if len(room_msgs_all) > 50:
-                            st.caption(f"💬 최근 50개 메시지 표시 중 (전체 {len(room_msgs_all)}개)")
+                            st.caption(f"💬 최근 50개 메시지 표시 중 (검색 결과 {len(room_msgs_all)}개)")
                         last_date = None
                         for chat in room_msgs:
                             chat_date = chat.get("date", "")
