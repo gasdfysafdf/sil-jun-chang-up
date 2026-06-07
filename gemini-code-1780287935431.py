@@ -1337,9 +1337,15 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                 filtered_chats = all_chats_view
 
             # 키워드 검색
-            search_kw = st.text_input("🔎 키워드 검색", placeholder="특정 단어 검색...", key="chat_search_kw")
-            if search_kw.strip():
-                filtered_chats = [c for c in filtered_chats if search_kw.lower() in c.get("msg","").lower()]
+            col_sf1, col_sf2 = st.columns([3, 1])
+            with col_sf1:
+                search_kw = st.text_input("🔎 키워드 검색", placeholder="특정 단어 검색...", key="chat_search_kw")
+                if search_kw.strip():
+                    filtered_chats = [c for c in filtered_chats if search_kw.lower() in c.get("msg","").lower()]
+            with col_sf2:
+                only_bad = st.toggle("🚨 불량만 보기", value=False, key="chat_only_bad")
+                if only_bad:
+                    filtered_chats = [c for c in filtered_chats if detect_bad_words(c.get("msg",""), default_bad_words)]
 
             # 발신자 필터
             senders = list(set(c.get("sender","?") for c in all_chats_view))
@@ -1347,7 +1353,11 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
             if sel_sender != "전체":
                 filtered_chats = [c for c in filtered_chats if c.get("sender") == sel_sender]
 
-            st.caption(f"총 {len(filtered_chats)}개 메시지")
+            bad_count = sum(1 for c in filtered_chats if detect_bad_words(c.get("msg",""), default_bad_words))
+            if bad_count:
+                st.markdown(f"총 **{len(filtered_chats)}개** 메시지 &nbsp;|&nbsp; 🚨 **불량 {bad_count}건**", unsafe_allow_html=True)
+            else:
+                st.caption(f"총 {len(filtered_chats)}개 메시지 | 불량 없음 ✅")
 
             chat_container = st.container(height=480)
             with chat_container:
@@ -1366,10 +1376,10 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                                 room_name = r["title"]
                                 break
                         st.markdown(
-                            f"<div style='background:{bg};border:{border};border-radius:8px;padding:8px 12px;margin-bottom:6px;'>"
-                            f"<b>{flag_icon}{c.get('sender','?')}</b> "
-                            f"<small style='color:#888;'>[ {room_name} · {c.get('date','')} {c.get('time','')} ]</small><br>"
-                            f"{c.get('msg','')}"
+                            f"<div style='background:{bg};border:{border};border-radius:8px;padding:8px 12px;margin-bottom:6px;color:#111111;'>"
+                            f"<b style='color:#111111;'>{flag_icon}{c.get('sender','?')}</b> "
+                            f"<small style='color:#555555;'>[ {room_name} · {c.get('date','')} {c.get('time','')} ]</small><br>"
+                            f"<span style='color:#111111;'>{c.get('msg','')}</span>"
                             + (f"<br><small style='color:#e74c3c;'>⚠️ 탐지어: {', '.join(bad_hits)}</small>" if bad_hits else "")
                             + "</div>",
                             unsafe_allow_html=True
