@@ -377,7 +377,38 @@ NOTIF_ICONS = {
     "sos_reply": "📬",
     "task": "📋",
     "notice": "📢",
+    "dm": "📧",
 }
+
+def get_unread_dms_count(team_data: dict, my_name: str) -> int:
+    """현재 사용자가 받은 읽지 않은 DM 수."""
+    if not team_data:
+        return 0
+    dms = team_data.get("direct_messages", [])
+    return sum(
+        1 for dm in dms
+        if dm.get("to_name") == my_name and not dm.get("read")
+    )
+
+def push_dm(team_id: str, from_name: str, to_name: str, msg: str):
+    """DM 전송 + 읽지 않은 상태로 저장."""
+    try:
+        team = get_cached_team(team_id)
+        if not team:
+            return
+        team.setdefault("direct_messages", []).insert(0, {
+            "id": str(uuid.uuid4()),
+            "from_name": from_name,
+            "to_name": to_name,
+            "message": msg,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "read": False,
+        })
+        # DM 최대 500개만 보관
+        team["direct_messages"] = team["direct_messages"][:500]
+        save_team_data(team_id, team)
+    except Exception:
+        pass
 
 # =============================================
 # [세션 초기화]
@@ -444,12 +475,18 @@ with st.sidebar:
         st.info("로그인 후 이용 가능합니다")
 
     st.write("---")
-    # 알림 뱃지 (사이드바)
+    # 알림 뱃지 (사이드바) - 최신 데이터로 매번 재로드
     if st.session_state.current_user and st.session_state.user_role not in ("admin",) and team_data:
         _my_name_sb = leader_name if (st.session_state.user_role == "leader" and leader_name != "미정") else st.session_state.current_user
-        _unread_sb = get_unread_count(team_data, _my_name_sb)
-        if _unread_sb > 0:
-            st.warning(f"🔔 읽지 않은 알림 **{_unread_sb}건**")
+        _fresh_team_sb = get_cached_team(st.session_state.current_team_id)  # 최신 데이터 로드
+        _unread_sb = get_unread_count(_fresh_team_sb, _my_name_sb)
+        _unread_dms = get_unread_dms_count(_fresh_team_sb, _my_name_sb)
+        _total_unread = _unread_sb + _unread_dms
+        if _total_unread > 0:
+            if _unread_dms > 0:
+                st.warning(f"📧 읽지 않은 DM **{_unread_dms}건** | 🔔 알림 **{_unread_sb}건**")
+            else:
+                st.warning(f"🔔 읽지 않은 알림 **{_unread_sb}건**")
 
     # 사이드바 D-day 표시
     if st.session_state.current_user and st.session_state.user_role != "admin" and team_data:
@@ -1831,7 +1868,7 @@ else:
 
     st.write("---")
 
-    tab_titles = ["🔔 알림", "📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
+    tab_titles = ["🔔 알림", "📧 DM", "📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
     if is_leader:
         tab_titles.insert(4, "👥 팀 관리")
 
@@ -1848,6 +1885,7 @@ else:
         with col_nb2:
             if st.button("✅ 전체 읽음 처리", use_container_width=True):
                 mark_notifications_read(st.session_state.current_team_id, my_chat_name)
+                get_cached_team.clear()  # 캐시 클리어 → 사이드바 뱃지도 바로 갱신
                 st.rerun()
 
         @st.fragment(run_every=8)
@@ -1881,6 +1919,69 @@ else:
                         st.caption(f"{icon} {n['message']} | {n['time']}")
 
         show_notifications_live()
+
+    # --- 탭: DM (다이렉트 메시지) ---
+    with tab_map["📧 DM"]:
+        st.subheader("📧 개인 메시지")
+        
+        _dm_unread = get_unread_dms_count(team_data, my_chat_name)
+        st.caption(f"읽지 않은 DM: **{_dm_unread}건**" if _dm_unread > 0 else "모든 메시지를 읽었습니다 ✅")
+
+        col_dm_new, col_dm_clear = st.columns([3, 1])
+        with col_dm_new:
+            st.markdown("#### 💌 새 메시지 보내기")
+        with col_dm_clear:
+            if st.button("🔄 새로고침", use_container_width=True):
+                get_cached_team.clear()
+                st.rerun()
+
+        with st.form("dm_form", clear_on_submit=True):
+            _dm_to = st.selectbox("받는 사람", [m for m in m_names if m != my_chat_name], key="dm_to_select")
+            _dm_msg = st.text_area("메시지", placeholder="1:1 개인 메시지를 입력하세요", height=80)
+            if st.form_submit_button("📧 메시지 전송", type="primary"):
+                if _dm_msg.strip():
+                    push_dm(st.session_state.current_team_id, my_chat_name, _dm_to, _dm_msg.strip())
+                    st.success(f"✅ {_dm_to}님께 메시지를 보냈습니다.")
+                    st.rerun()
+
+        st.write("---")
+        
+        @st.fragment(run_every=8)
+        def show_dms_live():
+            fresh_t = get_cached_team(st.session_state.current_team_id) or {}
+            all_dms = fresh_t.get("direct_messages", [])
+            
+            # 내가 받은 DM만 필터
+            my_dms = [dm for dm in all_dms if dm.get("to_name") == my_chat_name]
+            
+            if not my_dms:
+                st.info("📥 받은 메시지가 없습니다.")
+                return
+            
+            st.markdown("#### 📥 받은 메시지")
+            st.caption(f"총 {len(my_dms)}개 | 미읽음 {sum(1 for dm in my_dms if not dm.get('read'))}개")
+            
+            for i, dm in enumerate(my_dms):
+                is_read = dm.get("read", False)
+                with st.container(border=True):
+                    col_dm_l, col_dm_r = st.columns([5, 1])
+                    with col_dm_l:
+                        read_badge = "✅" if is_read else "🔴"
+                        st.markdown(f"**{read_badge} {dm.get('from_name','?')}** | {dm.get('time','')}")
+                        st.markdown(f"{dm.get('message','')}")
+                    with col_dm_r:
+                        if not is_read:
+                            if st.button("✓", key=f"mark_dm_{i}", help="읽음 처리"):
+                                _team_dm = get_cached_team(st.session_state.current_team_id) or {}
+                                for _dm_item in _team_dm.get("direct_messages", []):
+                                    if _dm_item.get("id") == dm.get("id"):
+                                        _dm_item["read"] = True
+                                        break
+                                save_team_data(st.session_state.current_team_id, _team_dm)
+                                get_cached_team.clear()
+                                st.rerun()
+        
+        show_dms_live()
 
     # --- 탭: 공지사항 ---
     with tab_map["📢 공지사항"]:
