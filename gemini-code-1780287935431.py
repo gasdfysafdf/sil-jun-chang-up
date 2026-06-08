@@ -311,104 +311,9 @@ def delete_team_data(team_id):
 # [알림 시스템]
 # =============================================
 
-def push_notification(team_id: str, target_name: str, notif_type: str, message: str, from_name: str = ""):
-    """
-    팀 데이터의 notifications 필드에 알림 추가.
-    notif_type: "mention" | "comment" | "like" | "sos_reply" | "task" | "notice"
-    target_name: 알림 받을 사람 이름 (my_chat_name 기준)
-    """
-    try:
-        team = get_cached_team(team_id)
-        if not team:
-            return
-        notif = {
-            "id": str(uuid.uuid4()),
-            "type": notif_type,
-            "target": target_name,
-            "message": message,
-            "from": from_name,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "read": False,
-        }
-        team.setdefault("notifications", []).insert(0, notif)
-        # 알림은 최대 100개만 보관
-        team["notifications"] = team["notifications"][:100]
-        save_team_data(team_id, team)
-    except Exception:
-        pass
-
-def mark_notifications_read(team_id: str, target_name: str):
-    """해당 사용자의 모든 알림을 읽음 처리."""
-    try:
-        team = get_cached_team(team_id)
-        if not team:
-            return
-        changed = False
-        for n in team.get("notifications", []):
-            if n.get("target") == target_name and not n.get("read"):
-                n["read"] = True
-                changed = True
-        if changed:
-            save_team_data(team_id, team)
-    except Exception:
-        pass
-
-def get_unread_count(team_data: dict, target_name: str) -> int:
-    """해당 사용자의 읽지 않은 알림 수 반환."""
-    if not team_data:
-        return 0
-    return sum(
-        1 for n in team_data.get("notifications", [])
-        if n.get("target") == target_name and not n.get("read")
-    )
-
 def extract_mentions(text: str, member_names: list) -> list:
-    """@이름 멘션 추출."""
-    mentioned = []
-    for name in member_names:
-        if f"@{name}" in text:
-            mentioned.append(name)
-    return mentioned
-
-NOTIF_ICONS = {
-    "mention": "💬",
-    "comment": "🗨️",
-    "like": "❤️",
-    "sos_reply": "📬",
-    "task": "📋",
-    "notice": "📢",
-    "dm": "📧",
-}
-
-def get_unread_dms_count(team_data: dict, my_name: str) -> int:
-    """현재 사용자가 받은 읽지 않은 DM 수."""
-    if not team_data:
-        return 0
-    dms = team_data.get("direct_messages", [])
-    return sum(
-        1 for dm in dms
-        if dm.get("to_name") == my_name and not dm.get("read")
-    )
-
-def push_dm(team_id: str, from_name: str, to_name: str, msg: str):
-    """DM 전송 + 읽지 않은 상태로 저장."""
-    try:
-        team = get_cached_team(team_id)
-        if not team:
-            return
-        team.setdefault("direct_messages", []).insert(0, {
-            "id": str(uuid.uuid4()),
-            "from_name": from_name,
-            "to_name": to_name,
-            "message": msg,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "read": False,
-        })
-        # DM 최대 500개만 보관
-        team["direct_messages"] = team["direct_messages"][:500]
-        save_team_data(team_id, team)
-    except Exception:
-        pass
+    """채팅 @멘션 추출 (채팅 전송 시 사용)."""
+    return [name for name in member_names if f"@{name}" in text]
 
 # =============================================
 # [세션 초기화]
@@ -1709,11 +1614,11 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
 
         st.write("---")
         st.markdown("#### 📊 접속 통계")
-        # 각 팀의 최근 활동 시각 파악
+        _all_teams_stat = get_all_teams()   # 한 번만 호출
         stat_rows = []
         for l_id, u_info in _db.get("users_master", {}).items():
             t_id = u_info["team_id"]
-            t_info = get_all_teams().get(t_id, {})
+            t_info = _all_teams_stat.get(t_id, {})
             chats = t_info.get("chats_archive", [])
             stories = t_info.get("stories", [])
             last_active = "활동 없음"
@@ -2163,23 +2068,37 @@ else:
             with chart_tabs[0]:
                 sel_user = st.selectbox("추이 조회", list(stocks.keys()), key="stock_detail_sel")
                 if sel_user and stocks.get(sel_user):
-                    chart_df = pd.DataFrame({"기여도(P)": stocks[sel_user]})
+                    vals_me = stocks[sel_user]
+                    avg_val = sum(v for vlist in stocks.values() for v in (vlist[-1:] or [])) / max(len(stocks), 1)
+                    chart_df = pd.DataFrame({
+                        "내 기여도(P)": vals_me,
+                        "팀 평균(P)": [round(avg_val)] * len(vals_me)
+                    })
                     st.line_chart(chart_df)
+                    st.caption(f"점선: 현재 팀 평균 **{avg_val:,.0f}P**")
+
                     logs = fresh_team.get("stock_logs", {}).get(sel_user, [])
                     if logs:
                         st.markdown("**최근 변동 이력 (최근 10건)**")
-                        log_df = pd.DataFrame(reversed(logs[-10:]))
-                        st.dataframe(log_df, use_container_width=True)
+                        display_logs = []
+                        for l in reversed(logs[-10:]):
+                            display_logs.append({
+                                "구분": "📈 증가" if l.get("type") == "plus" else "📉 감소",
+                                "변동량": f"+{l['val']:,}P" if l.get("type") == "plus" else f"-{l['val']:,}P",
+                                "사유": l.get("reason", "-"),
+                            })
+                        st.dataframe(pd.DataFrame(display_logs), use_container_width=True, hide_index=True)
             with chart_tabs[1]:
-                # 전체 조원 꺾은선 비교
                 max_len = max((len(v) for v in stocks.values()), default=1)
                 compare_data = {}
                 for name, vals in stocks.items():
                     padded = ([vals[0]] * (max_len - len(vals))) + vals if len(vals) < max_len else vals
                     compare_data[name] = padded
+                # 팀 평균선 추가
+                all_vals_by_step = list(zip(*compare_data.values()))
+                compare_data["── 팀 평균"] = [round(sum(step) / len(step)) for step in all_vals_by_step]
                 compare_df = pd.DataFrame(compare_data)
                 compare_df.index.name = "단계"
-                # 조원 6명 초과 시 범례가 겹쳐 보이므로 개인별 차트로 전환
                 if len(stocks) > 6:
                     st.caption("조원이 많아 개인별 카드로 표시합니다.")
                     card_cols2 = st.columns(2)
@@ -2686,17 +2605,6 @@ else:
                                     "file_bytes": file_b64,
                                 })
                                 save_team_data(st.session_state.current_team_id, _db2)
-                                # 멘션 알림 발송
-                                _mentions = extract_mentions(_msg_text, m_names)
-                                for _mname in _mentions:
-                                    if _mname != my_chat_name:
-                                        push_notification(
-                                            st.session_state.current_team_id,
-                                            _mname,
-                                            "mention",
-                                            f"[{target_room['title']}] {my_chat_name}님이 나를 멘션했습니다: {_msg_text[:40]}",
-                                            from_name=my_chat_name
-                                        )
                                 st.rerun()
 
         show_chat_live()
