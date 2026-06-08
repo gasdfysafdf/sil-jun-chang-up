@@ -5,6 +5,7 @@ import uuid
 import json
 import base64
 from datetime import datetime, timedelta, date as date_type
+import hashlib
 
 st.set_page_config(page_title="스타트리 (Startree)", page_icon="🌳", layout="wide")
 
@@ -67,6 +68,31 @@ def _auto_trim_team(t: dict) -> dict:
     if len(notices) > MAX_NOTICES:
         t["notices"] = notices[:MAX_NOTICES]
     return t
+
+def hash_pw(pw: str) -> str:
+    """SHA-256으로 비밀번호 해싱. 저장/비교 시 항상 이 함수를 사용."""
+    return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+
+def check_pw(plain: str, hashed: str) -> bool:
+    """입력 비밀번호와 저장된 해시 비교."""
+    return hash_pw(plain) == hashed
+
+def migrate_pw_if_plain(pw_stored: str, plain_input: str) -> tuple:
+    """
+    기존 평문 비밀번호를 가진 계정을 자동 마이그레이션.
+    - 평문으로 저장된 경우 → 해시로 업그레이드 후 (True, hash) 반환
+    - 이미 해시인 경우 → check_pw 결과와 기존 해시 반환
+    반환: (로그인 성공 여부, 저장할 pw 값)
+    """
+    # 이미 SHA-256 해시(64자 hex)인지 확인
+    if len(pw_stored) == 64 and all(c in "0123456789abcdef" for c in pw_stored):
+        # 해시 비교
+        return check_pw(plain_input, pw_stored), pw_stored
+    else:
+        # 평문 비교 (구버전 계정)
+        if pw_stored == plain_input:
+            return True, hash_pw(plain_input)  # 자동 마이그레이션
+        return False, pw_stored
 
 def compress_image_b64(raw_bytes: bytes, max_kb: int = MAX_IMAGE_KB) -> str:
     """PIL로 이미지를 리사이즈·압축 후 base64 반환. PIL 없으면 그냥 b64 반환."""
@@ -282,6 +308,78 @@ def delete_team_data(team_id):
         st.error(f"팀 삭제 오류: {e}")
 
 # =============================================
+# [알림 시스템]
+# =============================================
+
+def push_notification(team_id: str, target_name: str, notif_type: str, message: str, from_name: str = ""):
+    """
+    팀 데이터의 notifications 필드에 알림 추가.
+    notif_type: "mention" | "comment" | "like" | "sos_reply" | "task" | "notice"
+    target_name: 알림 받을 사람 이름 (my_chat_name 기준)
+    """
+    try:
+        team = get_cached_team(team_id)
+        if not team:
+            return
+        notif = {
+            "id": str(uuid.uuid4()),
+            "type": notif_type,
+            "target": target_name,
+            "message": message,
+            "from": from_name,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "read": False,
+        }
+        team.setdefault("notifications", []).insert(0, notif)
+        # 알림은 최대 100개만 보관
+        team["notifications"] = team["notifications"][:100]
+        save_team_data(team_id, team)
+    except Exception:
+        pass
+
+def mark_notifications_read(team_id: str, target_name: str):
+    """해당 사용자의 모든 알림을 읽음 처리."""
+    try:
+        team = get_cached_team(team_id)
+        if not team:
+            return
+        changed = False
+        for n in team.get("notifications", []):
+            if n.get("target") == target_name and not n.get("read"):
+                n["read"] = True
+                changed = True
+        if changed:
+            save_team_data(team_id, team)
+    except Exception:
+        pass
+
+def get_unread_count(team_data: dict, target_name: str) -> int:
+    """해당 사용자의 읽지 않은 알림 수 반환."""
+    if not team_data:
+        return 0
+    return sum(
+        1 for n in team_data.get("notifications", [])
+        if n.get("target") == target_name and not n.get("read")
+    )
+
+def extract_mentions(text: str, member_names: list) -> list:
+    """@이름 멘션 추출."""
+    mentioned = []
+    for name in member_names:
+        if f"@{name}" in text:
+            mentioned.append(name)
+    return mentioned
+
+NOTIF_ICONS = {
+    "mention": "💬",
+    "comment": "🗨️",
+    "like": "❤️",
+    "sos_reply": "📬",
+    "task": "📋",
+    "notice": "📢",
+}
+
+# =============================================
 # [세션 초기화]
 # =============================================
 _defaults = {
@@ -346,6 +444,13 @@ with st.sidebar:
         st.info("로그인 후 이용 가능합니다")
 
     st.write("---")
+    # 알림 뱃지 (사이드바)
+    if st.session_state.current_user and st.session_state.user_role not in ("admin",) and team_data:
+        _my_name_sb = leader_name if (st.session_state.user_role == "leader" and leader_name != "미정") else st.session_state.current_user
+        _unread_sb = get_unread_count(team_data, _my_name_sb)
+        if _unread_sb > 0:
+            st.warning(f"🔔 읽지 않은 알림 **{_unread_sb}건**")
+
     # 사이드바 D-day 표시
     if st.session_state.current_user and st.session_state.user_role != "admin" and team_data:
         try:
@@ -411,20 +516,34 @@ elif st.session_state.step == "auth_login":
             if st.button("로그인", use_container_width=True, type="primary"):
                 _db = get_cached_meta()
                 admin_cfg = _db["admin_master"]
-                if login_id == admin_cfg["admin_id"] and login_pw == admin_cfg["admin_pw"]:
+                _admin_stored_pw = admin_cfg["admin_pw"]
+                _admin_ok, _admin_new_pw = migrate_pw_if_plain(_admin_stored_pw, login_pw)
+                if login_id == admin_cfg["admin_id"] and _admin_ok:
+                    if _admin_new_pw != _admin_stored_pw:
+                        _db2_adm = get_cached_meta()
+                        _db2_adm["admin_master"]["admin_pw"] = _admin_new_pw
+                        save_meta_data(_db2_adm)
                     st.session_state.current_user = login_id
                     st.session_state.user_role = "admin"
                     st.session_state.step = "admin_dashboard"
                     st.rerun()
-                elif login_id in _db["users_master"] and _db["users_master"][login_id]["pw"] == login_pw:
-                    user_info = _db["users_master"][login_id]
-                    st.session_state.current_user = login_id
-                    st.session_state.user_role = "leader"
-                    st.session_state.current_team_id = user_info["team_id"]
-                    st.session_state.step = "main_home" if user_info["team_id"] in _db["teams_index"] else "setup_1"
-                    st.rerun()
-                else:
-                    st.error("아이디 또는 비밀번호가 잘못되었습니다.")
+                elif login_id in _db["users_master"]:
+                    _stored_pw = _db["users_master"][login_id]["pw"]
+                    _login_ok, _new_pw = migrate_pw_if_plain(_stored_pw, login_pw)
+                    if _login_ok:
+                        # 평문 계정 자동 해시 마이그레이션
+                        if _new_pw != _stored_pw:
+                            _db2 = get_cached_meta()
+                            _db2["users_master"][login_id]["pw"] = _new_pw
+                            save_meta_data(_db2)
+                        user_info = _db["users_master"][login_id]
+                        st.session_state.current_user = login_id
+                        st.session_state.user_role = "leader"
+                        st.session_state.current_team_id = user_info["team_id"]
+                        st.session_state.step = "main_home" if user_info["team_id"] in _db["teams_index"] else "setup_1"
+                        st.rerun()
+                    else:
+                        st.error("아이디 또는 비밀번호가 잘못되었습니다.")
         with col_l2:
             _db_sec = get_cached_meta()
             _team_lock = _db_sec["admin_master"].get("security_settings", {}).get("new_team_lock", False)
@@ -446,7 +565,8 @@ elif st.session_state.step == "auth_login":
                 if st.button("아이디 찾기", key="find_id_btn"):
                     found = None
                     for uid, uinfo in _db["users_master"].items():
-                        if uinfo["pw"] == find_pw:
+                        _ok, _ = migrate_pw_if_plain(uinfo["pw"], find_pw)
+                        if _ok:
                             t_info = _db["teams_index"].get(uinfo["team_id"], {})
                             if t_info.get("team_name", "").strip() == find_team:
                                 found = uid
@@ -456,13 +576,17 @@ elif st.session_state.step == "auth_login":
                 find_id = st.text_input("아이디", key="find_id_input").strip()
                 find_team2 = st.text_input("조 이름", key="find_team_name_pw").strip()
                 if st.button("비밀번호 찾기", key="find_pw_btn"):
-                    found_pw = None
+                    found_match = False
                     if find_id in _db["users_master"]:
                         uinfo = _db["users_master"][find_id]
                         t_info = _db["teams_index"].get(uinfo["team_id"], {})
                         if t_info.get("team_name", "").strip() == find_team2:
-                            found_pw = uinfo["pw"]
-                    st.success(f"✅ 비밀번호: **{found_pw}**") if found_pw else st.error("일치하는 계정이 없습니다.")
+                            found_match = True
+                    if found_match:
+                        st.success("✅ 계정이 확인되었습니다. 관리자에게 비밀번호 재설정을 요청하거나 SOS를 이용하세요.")
+                        st.caption("🔒 보안을 위해 비밀번호는 직접 표시하지 않습니다.")
+                    else:
+                        st.error("일치하는 계정이 없습니다.")
 
 # =============================================
 # [분기 3] 조장 회원가입
@@ -501,7 +625,7 @@ elif st.session_state.step == "auth_register":
             else:
                 new_team_id = str(uuid.uuid4())
                 _db = get_cached_meta()
-                _db["users_master"][reg_id] = {"pw": reg_pw, "team_id": new_team_id}
+                _db["users_master"][reg_id] = {"pw": hash_pw(reg_pw), "team_id": new_team_id}
                 save_meta_data(_db)
                 st.session_state.id_checked = False
                 st.session_state.step = "auth_login"
@@ -736,7 +860,6 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                 t_info = get_all_teams().get(t_id, {})
                 records.append({
                     "조장 ID": l_id,
-                    "비밀번호": u_info["pw"],
                     "조 이름": t_info.get("team_name", "미완료"),
                     "프로젝트 주제": t_info.get("subject", "-"),
                     "조원 수": len(t_info.get("members", [])),
@@ -753,7 +876,7 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                 if st.button("🔒 비밀번호 변경", type="primary"):
                     if new_pw.strip():
                         _db2 = get_cached_meta()
-                        _db2["users_master"][target_leader]["pw"] = new_pw.strip()
+                        _db2["users_master"][target_leader]["pw"] = hash_pw(new_pw.strip())
                         _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
                             "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "admin": st.session_state.current_user,
@@ -900,6 +1023,17 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                                 _db2["admin_master"]["bug_reports"][true_idx]["reply"] = reply_text.strip()
                                 _db2["admin_master"]["bug_reports"][true_idx]["status"] = "✔️ 처리완료"
                                 save_meta_data(_db2)
+                                # SOS 답변 알림
+                                _sos_sender = rep.get("sender","")
+                                _sos_team_id = rep.get("team_id","")
+                                if _sos_sender and _sos_team_id:
+                                    push_notification(
+                                        _sos_team_id,
+                                        _sos_sender,
+                                        "sos_reply",
+                                        f"📬 관리자가 SOS 문의에 답변했습니다: {reply_text.strip()[:50]}",
+                                        from_name="관리자"
+                                    )
                                 st.rerun()
                         with c_b2:
                             if st.form_submit_button("🗑️ 삭제"):
@@ -1479,17 +1613,18 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         st.markdown("#### 🔑 관리자 계정 변경")
         with st.form("admin_profile_form"):
             new_ad_id = st.text_input("새 관리자 ID", value=_db["admin_master"]["admin_id"]).strip()
-            new_ad_pw = st.text_input("새 관리자 비밀번호", value=_db["admin_master"]["admin_pw"], type="password").strip()
+            new_ad_pw = st.text_input("새 관리자 비밀번호", type="password", placeholder="변경할 경우만 입력").strip()
             new_ad_pw2 = st.text_input("새 비밀번호 확인", type="password").strip()
             if st.form_submit_button("💾 계정 정보 변경"):
-                if not (new_ad_id and new_ad_pw):
-                    st.error("ID와 비밀번호를 모두 입력하세요.")
-                elif new_ad_pw != new_ad_pw2:
+                if not new_ad_id:
+                    st.error("ID를 입력하세요.")
+                elif new_ad_pw and new_ad_pw != new_ad_pw2:
                     st.error("비밀번호가 일치하지 않습니다.")
                 else:
                     _db2 = get_cached_meta()
                     _db2["admin_master"]["admin_id"] = new_ad_id
-                    _db2["admin_master"]["admin_pw"] = new_ad_pw
+                    if new_ad_pw:
+                        _db2["admin_master"]["admin_pw"] = hash_pw(new_ad_pw)
                     _db2["admin_master"].setdefault("activity_logs", []).insert(0, {
                         "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "admin": st.session_state.current_user,
@@ -1696,12 +1831,56 @@ else:
 
     st.write("---")
 
-    tab_titles = ["📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
+    tab_titles = ["🔔 알림", "📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
     if is_leader:
         tab_titles.insert(4, "👥 팀 관리")
 
     tabs = st.tabs(tab_titles)
     tab_map = {t: tabs[i] for i, t in enumerate(tab_titles)}
+
+    # --- 탭: 알림 ---
+    with tab_map["🔔 알림"]:
+        _unread_cnt = get_unread_count(team_data, my_chat_name)
+        notif_label = f"🔔 알림 ({_unread_cnt}건 미읽음)" if _unread_cnt > 0 else "🔔 알림"
+        st.subheader(notif_label)
+
+        col_nb1, col_nb2 = st.columns([3, 1])
+        with col_nb2:
+            if st.button("✅ 전체 읽음 처리", use_container_width=True):
+                mark_notifications_read(st.session_state.current_team_id, my_chat_name)
+                st.rerun()
+
+        @st.fragment(run_every=8)
+        def show_notifications_live():
+            fresh_t = get_cached_team(st.session_state.current_team_id) or {}
+            all_notifs = [n for n in fresh_t.get("notifications", []) if n.get("target") == my_chat_name]
+
+            if not all_notifs:
+                st.info("🎉 새로운 알림이 없습니다.")
+                return
+
+            unread = [n for n in all_notifs if not n.get("read")]
+            read = [n for n in all_notifs if n.get("read")]
+
+            st.caption(f"총 {len(all_notifs)}건 | 미읽음 {len(unread)}건")
+
+            if unread:
+                st.markdown("#### 🔴 새 알림")
+                for n in unread[:20]:
+                    icon = NOTIF_ICONS.get(n.get("type",""), "🔔")
+                    with st.container(border=True):
+                        col_ni, col_nt = st.columns([1, 8])
+                        col_ni.markdown(f"## {icon}")
+                        col_nt.markdown(f"**{n['message']}**")
+                        col_nt.caption(f"🕐 {n['time']}" + (f" | 보낸사람: {n['from']}" if n.get('from') else ""))
+
+            if read:
+                with st.expander(f"📂 읽은 알림 ({len(read)}건)", expanded=False):
+                    for n in read[:30]:
+                        icon = NOTIF_ICONS.get(n.get("type",""), "🔔")
+                        st.caption(f"{icon} {n['message']} | {n['time']}")
+
+        show_notifications_live()
 
     # --- 탭: 공지사항 ---
     with tab_map["📢 공지사항"]:
@@ -1736,6 +1915,16 @@ else:
                             "pinned": pin_notice
                         })
                         save_team_data(st.session_state.current_team_id, _db2)
+                        # 공지 알림: 조원 전원에게
+                        for _nm in m_names:
+                            if _nm != my_chat_name:
+                                push_notification(
+                                    st.session_state.current_team_id,
+                                    _nm,
+                                    "notice",
+                                    f"📢 새 공지사항: {notice_text[:50]}",
+                                    from_name=my_chat_name
+                                )
                         st.success("✅ 공지가 게시되었습니다.")
                         st.rerun()
         else:
@@ -1869,12 +2058,22 @@ else:
                         like_label = f"❤️ {s.get('likes', 0)}" + (" (내가 좋아요)" if already_liked else "")
                         if st.button(like_label, key=f"like_{s_id}", disabled=already_liked):
                             _db2 = get_cached_team(st.session_state.current_team_id)
+                            _like_author = None
                             for os_ in _db2.get("stories", []):
                                 if os_.get("story_id") == s_id:
                                     os_["likes"] = os_.get("likes", 0) + 1
                                     os_.setdefault("liked_by", []).append(my_chat_name)
+                                    _like_author = os_.get("user")
                                     break
                             save_team_data(st.session_state.current_team_id, _db2)
+                            if _like_author and _like_author != my_chat_name:
+                                push_notification(
+                                    st.session_state.current_team_id,
+                                    _like_author,
+                                    "like",
+                                    f"{my_chat_name}님이 내 피드를 좋아합니다 ❤️",
+                                    from_name=my_chat_name
+                                )
                             st.rerun()
 
                         for cm in s.get("comments", []):
@@ -1884,11 +2083,22 @@ else:
                             c_text = st.text_input("댓글", key=f"cm_{s_id}")
                             if st.form_submit_button("댓글 달기") and c_text.strip():
                                 _db2 = get_cached_team(st.session_state.current_team_id)
+                                _story_author = None
                                 for os_ in _db2.get("stories", []):
                                     if os_.get("story_id") == s_id:
                                         os_.setdefault("comments", []).append({"writer": my_chat_name, "text": c_text.strip()})
+                                        _story_author = os_.get("user")
                                         break
                                 save_team_data(st.session_state.current_team_id, _db2)
+                                # 댓글 알림 (스토리 작성자에게)
+                                if _story_author and _story_author != my_chat_name:
+                                    push_notification(
+                                        st.session_state.current_team_id,
+                                        _story_author,
+                                        "comment",
+                                        f"{my_chat_name}님이 내 피드에 댓글을 달았습니다: {c_text.strip()[:40]}",
+                                        from_name=my_chat_name
+                                    )
                                 st.rerun()
 
             show_stories_live()
@@ -2113,29 +2323,53 @@ else:
                                         if st.button("✔️", key=f"v_{ev_id}"):
                                             _db2 = get_cached_team(st.session_state.current_team_id)
                                             t2 = _db2
+                                            _task_worker = None
+                                            _task_content = ""
                                             for ev2 in t2.get("calendar_events", {}).get(d_str, []):
                                                 if ev2.get("id") == ev_id:
                                                     ev2["status"] = "✔️"
                                                     tw = ev2["worker"]
+                                                    _task_worker = tw
+                                                    _task_content = ev2.get("content","")
                                                     if tw in t2.get("stocks", {}):
                                                         t2["stocks"][tw].append(t2["stocks"][tw][-1] + 3000)
                                                         t2.setdefault("stock_logs", {}).setdefault(tw, []).append({"type": "plus", "val": 3000, "reason": f"{d_str} 결재"})
                                                     break
                                             save_team_data(st.session_state.current_team_id, _db2)
+                                            if _task_worker and _task_worker != my_chat_name:
+                                                push_notification(
+                                                    st.session_state.current_team_id,
+                                                    _task_worker,
+                                                    "task",
+                                                    f"✔️ 업무가 결재되었습니다: {_task_content[:30]} (+3,000P)",
+                                                    from_name=my_chat_name
+                                                )
                                             st.rerun()
                                     with b2:
                                         if st.button("❌", key=f"x_{ev_id}"):
                                             _db2 = get_cached_team(st.session_state.current_team_id)
                                             t2 = _db2
+                                            _task_worker2 = None
+                                            _task_content2 = ""
                                             for ev2 in t2.get("calendar_events", {}).get(d_str, []):
                                                 if ev2.get("id") == ev_id:
                                                     ev2["status"] = "❌"
                                                     tw = ev2["worker"]
+                                                    _task_worker2 = tw
+                                                    _task_content2 = ev2.get("content","")
                                                     if tw in t2.get("stocks", {}):
                                                         t2["stocks"][tw].append(max(0, t2["stocks"][tw][-1] - 3000))
                                                         t2.setdefault("stock_logs", {}).setdefault(tw, []).append({"type": "minus", "val": 3000, "reason": f"{d_str} 반려"})
                                                     break
                                             save_team_data(st.session_state.current_team_id, _db2)
+                                            if _task_worker2 and _task_worker2 != my_chat_name:
+                                                push_notification(
+                                                    st.session_state.current_team_id,
+                                                    _task_worker2,
+                                                    "task",
+                                                    f"❌ 업무가 반려되었습니다: {_task_content2[:30]} (-3,000P)",
+                                                    from_name=my_chat_name
+                                                )
                                             st.rerun()
                                     with b3:
                                         if st.button("🗑️", key=f"del_{ev_id}"):
@@ -2427,16 +2661,28 @@ else:
                                             file_b64 = base64.b64encode(raw_chat_file).decode("utf-8")
                                         file_name = chat_file.name
                                 _db2 = get_cached_team(st.session_state.current_team_id)
+                                _msg_text = msg_in.strip() if msg_in.strip() else f"📎 파일 전송: {file_name}"
                                 _db2.setdefault("chats_archive", []).append({
                                     "room_id": target_room["room_id"],
                                     "sender": my_chat_name,
-                                    "msg": msg_in.strip() if msg_in.strip() else f"📎 파일 전송: {file_name}",
+                                    "msg": _msg_text,
                                     "time": datetime.now().strftime("%H:%M"),
                                     "date": datetime.now().strftime("%Y-%m-%d"),
                                     "file_name": file_name,
                                     "file_bytes": file_b64,
                                 })
                                 save_team_data(st.session_state.current_team_id, _db2)
+                                # 멘션 알림 발송
+                                _mentions = extract_mentions(_msg_text, m_names)
+                                for _mname in _mentions:
+                                    if _mname != my_chat_name:
+                                        push_notification(
+                                            st.session_state.current_team_id,
+                                            _mname,
+                                            "mention",
+                                            f"[{target_room['title']}] {my_chat_name}님이 나를 멘션했습니다: {_msg_text[:40]}",
+                                            from_name=my_chat_name
+                                        )
                                 st.rerun()
 
         show_chat_live()
