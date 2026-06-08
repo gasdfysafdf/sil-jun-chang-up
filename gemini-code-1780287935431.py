@@ -164,7 +164,7 @@ DEFAULT_TEAM = {
 }
 
 # --- 메타 ----------------------------------------------------------------
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=10)
 def get_cached_meta():
     """관리자 정보 + 유저 마스터 + 팀 목록(인덱스)만 로드."""
     try:
@@ -193,7 +193,7 @@ def save_meta_data(meta_db):
 
 
 # --- 팀 ------------------------------------------------------------------
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=8)
 def get_cached_team(team_id):
     """특정 팀 데이터만 로드. 없으면 None."""
     if not team_id:
@@ -211,7 +211,7 @@ def get_cached_team(team_id):
         return None
 
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=15)
 def get_all_teams():
     """모든 팀을 한 번의 쿼리로 로드 (관리자 집계 화면 전용). {team_id: team_data}."""
     try:
@@ -359,7 +359,7 @@ with st.sidebar:
                 st.error(f"⏰ 마감 {abs(_dd)}일 초과")
         except Exception:
             pass
-    st.caption("⚙️ Startree v2.2 · 2026")
+    st.caption("⚙️ Startree v3.0 · 2026")
 
 # =============================================
 # [분기 1] 조원 초대 링크 접속
@@ -634,10 +634,7 @@ elif st.session_state.step == "setup_5":
 # =============================================
 elif st.session_state.step == "admin_dashboard" and st.session_state.user_role == "admin":
     st.title("🌳 스타트리 마스터 관제탑")
-    @st.fragment(run_every=5)
-    def _admin_clock():
-        st.markdown(f"**⚡ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}** | 관리자: **{st.session_state.current_user}**")
-    _admin_clock()
+    st.markdown(f"**⚡ {datetime.now().strftime('%Y-%m-%d %H:%M')}** | 관리자: **{st.session_state.current_user}**")
     st.write("---")
 
     admin_tabs = st.tabs([
@@ -1663,6 +1660,23 @@ else:
             st.warning("⚠️ 오늘이 프로젝트 마감일입니다!")
         else:
             st.error(f"⏰ 프로젝트 마감일이 {abs(dday)}일 지났습니다.")
+        # 마감 3일 이내 임박 알림
+        if 0 < dday <= 3:
+            st.warning(f"🔔 **마감 {dday}일 전!** 미완료 업무를 확인하세요.")
+    except Exception:
+        pass
+
+    # 나에게 배정된 미완료 업무 알림
+    try:
+        _my_pending = []
+        for d_str, evs in team_data.get("calendar_events", {}).items():
+            for ev in evs:
+                if ev.get("worker") == my_chat_name and "⏳" in ev.get("status", "⏳"):
+                    _my_pending.append(f"{d_str}: {ev.get('content','')[:20]}")
+        if _my_pending:
+            with st.expander(f"📋 내 미완료 업무 {len(_my_pending)}건", expanded=False):
+                for task in _my_pending:
+                    st.caption(f"• {task}")
     except Exception:
         pass
 
@@ -2264,6 +2278,13 @@ else:
 
         st.write("---")
 
+        # ── 채팅 필터는 fragment 밖에서 선언 (입력 시 fragment 재실행 방지) ──
+        _filter_col1, _filter_col2 = st.columns([2, 3])
+        with _filter_col1:
+            _chat_filter_date = st.date_input("📅 날짜 필터 (선택)", value=None, key="chat_date_global")
+        with _filter_col2:
+            _chat_filter_kw = st.text_input("🔎 키워드 검색", placeholder="단어 입력", key="chat_kw_global")
+
         @st.fragment(run_every=4)
         def show_chat_live():
             fresh = get_cached_team(st.session_state.current_team_id)
@@ -2279,10 +2300,8 @@ else:
                     st.caption("참여 중인 채팅방이 없습니다.")
                 for rm in my_rooms:
                     is_active = (st.session_state.active_chat_room_id == rm["room_id"])
-                    # 해당 방의 최근 메시지 미리보기
-                    room_msgs = [c for c in all_chats if c.get("room_id") == rm["room_id"]]
-                    last_msg = f" · {room_msgs[-1]['msg'][:10]}..." if room_msgs else ""
-                    unread_count = sum(1 for c in room_msgs[-20:] if c.get("sender") != my_chat_name)
+                    room_msgs_preview = [c for c in all_chats if c.get("room_id") == rm["room_id"]]
+                    unread_count = sum(1 for c in room_msgs_preview[-20:] if c.get("sender") != my_chat_name)
                     badge = f" 🔴{unread_count}" if unread_count > 0 and not is_active else ""
                     label = f"{'🟢 ' if is_active else '💬 '}{rm['title']} ({len(rm['members'])}명){badge}"
                     if st.button(label, key=f"room_{rm['room_id']}", use_container_width=True,
@@ -2324,33 +2343,24 @@ else:
                             st.rerun()
 
                     msg_box = st.container(height=350)
-                    
-                    # 채팅 검색 필터
-                    col_filter1, col_filter2 = st.columns([2, 3])
-                    with col_filter1:
-                        search_date = st.date_input("📅 날짜 필터 (선택)", value=None, key=f"chat_date_{target_room['room_id']}")
-                    with col_filter2:
-                        search_keyword = st.text_input("🔎 키워드 검색", placeholder="단어 입력", key=f"chat_kw_{target_room['room_id']}")
-                    
                     with msg_box:
                         room_msgs_all = [c for c in fresh_team.get("chats_archive", []) if c.get("room_id") == target_room["room_id"]]
-                        
-                        # 필터 적용
-                        if search_date:
-                            search_date_str = search_date.strftime("%Y-%m-%d")
-                            room_msgs_all = [c for c in room_msgs_all if c.get("date") == search_date_str]
-                        if search_keyword.strip():
-                            kw_lower = search_keyword.lower()
-                            room_msgs_all = [c for c in room_msgs_all if kw_lower in c.get("msg", "").lower()]
-                        
-                        # 최근 50개만 렌더링
+
+                        # fragment 밖에서 입력된 필터 값 사용 (session_state로 읽기)
+                        _fdate = st.session_state.get("chat_date_global")
+                        _fkw   = st.session_state.get("chat_kw_global", "")
+                        if _fdate:
+                            room_msgs_all = [c for c in room_msgs_all if c.get("date") == _fdate.strftime("%Y-%m-%d")]
+                        if _fkw.strip():
+                            room_msgs_all = [c for c in room_msgs_all if _fkw.lower() in c.get("msg", "").lower()]
+
+                        # 최근 50개만 렌더링 (랙 방지)
                         room_msgs = room_msgs_all[-50:]
                         if len(room_msgs_all) > 50:
-                            st.caption(f"💬 최근 50개 메시지 표시 중 (검색 결과 {len(room_msgs_all)}개)")
+                            st.caption(f"💬 최근 50개 표시 중 (검색결과 {len(room_msgs_all)}개)")
                         last_date = None
                         for chat in room_msgs:
                             chat_date = chat.get("date", "")
-                            # 날짜 구분선
                             if chat_date and chat_date != last_date:
                                 today_str_c = datetime.now().strftime("%Y-%m-%d")
                                 label_date = "오늘" if chat_date == today_str_c else chat_date
@@ -2361,11 +2371,16 @@ else:
                             attach_html = ""
                             if chat.get("file_name") and chat.get("file_name") != "없음":
                                 attach_html = f"<br>📎 <i>{chat['file_name']}</i>"
+                            # @멘션 하이라이트
+                            msg_text = chat.get("msg", "")
+                            for name in m_names:
+                                if f"@{name}" in msg_text:
+                                    msg_text = msg_text.replace(f"@{name}", f"<span style='background:#fff3cd;font-weight:bold;'>@{name}</span>")
                             if is_me:
                                 st.markdown(
                                     f"<div style='text-align:right;margin-bottom:6px;'>"
                                     f"<span style='background:#ffe600;color:black;padding:5px 10px;border-radius:12px;display:inline-block;max-width:70%;text-align:left;'>"
-                                    f"<b>나 ({my_chat_name})</b><br>{chat['msg']}{attach_html}"
+                                    f"<b>나 ({my_chat_name})</b><br>{msg_text}{attach_html}"
                                     f"<br><small style='color:gray;font-size:10px;'>{time_label}</small></span></div>",
                                     unsafe_allow_html=True
                                 )
@@ -2373,11 +2388,10 @@ else:
                                 st.markdown(
                                     f"<div style='text-align:left;margin-bottom:6px;'>"
                                     f"<span style='background:#f1f1f1;color:black;padding:5px 10px;border-radius:12px;display:inline-block;max-width:70%;'>"
-                                    f"<b>{chat['sender']}</b><br>{chat['msg']}{attach_html}"
+                                    f"<b>{chat['sender']}</b><br>{msg_text}{attach_html}"
                                     f"<br><small style='color:gray;font-size:10px;'>{time_label}</small></span></div>",
                                     unsafe_allow_html=True
                                 )
-                            # 첨부파일 다운로드 버튼 (이미지면 인라인 표시)
                             if chat.get("file_bytes") and chat.get("file_name") and chat["file_name"] != "없음":
                                 raw_file = base64.b64decode(chat["file_bytes"]) if isinstance(chat["file_bytes"], str) else chat["file_bytes"]
                                 fname_lower = chat["file_name"].lower()
@@ -2392,7 +2406,7 @@ else:
                                     )
 
                     with st.form(f"chat_form_{target_room['room_id']}", clear_on_submit=True):
-                        msg_in = st.text_input("메시지 입력", placeholder="메시지를 입력하세요")
+                        msg_in = st.text_input("메시지 입력", placeholder=f"메시지 입력 (@이름 으로 멘션 가능)")
                         chat_file = st.file_uploader(
                             "📎 파일 첨부 (선택, 최대 800KB)",
                             type=["png", "jpg", "jpeg", "gif", "pdf", "docx", "xlsx", "pptx", "txt", "zip", "mp3", "wav"],
@@ -2407,7 +2421,6 @@ else:
                                     if len(raw_chat_file) / 1024 > MAX_FILE_KB:
                                         st.error(f"❌ 파일 크기가 {MAX_FILE_KB}KB를 초과합니다.")
                                     else:
-                                        # 이미지는 압축 후 저장
                                         if chat_file.name.lower().endswith((".png", ".jpg", ".jpeg")):
                                             file_b64 = compress_image_b64(raw_chat_file, MAX_IMAGE_KB)
                                         else:
@@ -2444,7 +2457,7 @@ else:
                         img_b64 = None
                         img_name = "없음"
                         if bug_img:
-                            img_b64 = base64.b64encode(bug_img.read()).decode("utf-8")
+                            img_b64 = compress_image_b64(bug_img.read(), MAX_IMAGE_KB)
                             img_name = bug_img.name
                         _db2 = get_cached_meta()
                         _db2["admin_master"].setdefault("bug_reports", []).append({
