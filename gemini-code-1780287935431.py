@@ -1782,7 +1782,7 @@ else:
     st.markdown(
         f"**🎯 주제:** {team_data.get('subject', '미정')} | "
         f"**👑 조장:** {leader_name} | "
-        f"**👤 접속자:** {my_chat_name} ({'조장' if is_leader else '조원'})"
+        f"**👤 접속자:** {my_chat_name} ({'👑 조장' if is_leader else ('🥈 부조장' if is_sub_leader else '👤 조원')})"
     )
 
     # D-day 표시
@@ -1842,7 +1842,7 @@ else:
     st.write("---")
 
     tab_titles = ["📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
-    if is_leader or is_sub_leader:
+    if is_leader:  # ← 부조장은 팀 관리 탭을 볼 수 없음 (일반 조원처럼 취급)
         tab_titles.insert(4, "👥 팀 관리")
 
     tabs = st.tabs(tab_titles)
@@ -2073,33 +2073,35 @@ else:
     with tab_map["📊 기여도"]:
         st.subheader("📊 기여도 주식 대시보드")
 
-        if is_leader:
+        if is_leader or is_sub_leader:
             if has_perm("기여도_수정"):
-             with st.expander("⚙️ 기여도 수동 조정 (조장/부조장 전용)"):
-                _db = get_cached_team(st.session_state.current_team_id)
-                cur_stocks = (_db or {}).get("stocks", {})
-                if cur_stocks:
-                    adj_target = st.selectbox("조원 선택", list(cur_stocks.keys()), key="adj_stock_target")
-                    adj_val = st.number_input("조정값 (양수: 증가, 음수: 감소)", value=1000, step=500, key="adj_stock_val")
-                    adj_reason = st.text_input("사유", placeholder="예: 발표 준비 추가 기여", key="adj_reason")
-                    if st.button("기여도 조정 적용"):
-                        if not adj_reason.strip():
-                            st.warning("⚠️ 사유를 입력해주세요.")
-                        else:
-                            _db2 = get_cached_team(st.session_state.current_team_id)
-                            t = _db2
-                            cur_val = t["stocks"][adj_target][-1]
-                            new_val = max(0, cur_val + adj_val)
-                            t["stocks"][adj_target].append(new_val)
-                            t.setdefault("stock_logs", {}).setdefault(adj_target, []).append({
-                                "type": "plus" if adj_val >= 0 else "minus",
-                                "val": abs(adj_val),
-                                "reason": adj_reason.strip()
-                            })
-                            save_team_data(st.session_state.current_team_id, _db2)
-                            direction = f"+{adj_val:,}P" if adj_val >= 0 else f"{adj_val:,}P"
-                            st.toast(f"✅ {adj_target} 기여도 조정 완료: {cur_val:,}P → {new_val:,}P ({direction})")
-                            st.rerun()
+                with st.expander("⚙️ 기여도 수동 조정 (조장/부조장 전용)"):
+                    _db = get_cached_team(st.session_state.current_team_id)
+                    cur_stocks = (_db or {}).get("stocks", {})
+                    if cur_stocks:
+                        adj_target = st.selectbox("조원 선택", list(cur_stocks.keys()), key="adj_stock_target")
+                        adj_val = st.number_input("조정값 (양수: 증가, 음수: 감소)", value=1000, step=500, key="adj_stock_val")
+                        adj_reason = st.text_input("사유", placeholder="예: 발표 준비 추가 기여", key="adj_reason")
+                        if st.button("기여도 조정 적용"):
+                            if not adj_reason.strip():
+                                st.warning("⚠️ 사유를 입력해주세요.")
+                            else:
+                                _db2 = get_cached_team(st.session_state.current_team_id)
+                                t = _db2
+                                cur_val = t["stocks"][adj_target][-1]
+                                new_val = max(0, cur_val + adj_val)
+                                t["stocks"][adj_target].append(new_val)
+                                t.setdefault("stock_logs", {}).setdefault(adj_target, []).append({
+                                    "type": "plus" if adj_val >= 0 else "minus",
+                                    "val": abs(adj_val),
+                                    "reason": adj_reason.strip()
+                                })
+                                save_team_data(st.session_state.current_team_id, _db2)
+                                direction = f"+{adj_val:,}P" if adj_val >= 0 else f"{adj_val:,}P"
+                                st.toast(f"✅ {adj_target} 기여도 조정 완료: {cur_val:,}P → {new_val:,}P ({direction})")
+                                st.rerun()
+            else:
+                st.info("❌ 기여도 수정 권한이 없습니다.")
 
         @st.fragment(run_every=15)
         def show_stocks_live():
@@ -2367,14 +2369,10 @@ else:
 
         show_calendar_live()
 
-    # --- 탭: 팀 관리 (조장/부조장) ---
-    if is_leader or is_sub_leader:
+    # --- 탭: 팀 관리 (조장만) ---
+    if is_leader:  # ← 부조장은 팀 관리 탭 접근 불가
         with tab_map["👥 팀 관리"]:
             st.subheader("👥 팀 관리")
-            
-            # 부조장이면 부여받은 권한만 요약 표시
-            if is_sub_leader:
-                st.info(f"🥈 부조장 계정으로 입장했습니다. 부여된 권한: **{', '.join(st.session_state.get('sub_leader_perms', []))}**")
 
             host = st.context.headers.get("Host", "localhost:8501")
             protocol = "https" if "localhost" not in host else "http"
@@ -2413,57 +2411,59 @@ else:
 
             st.write("---")
             if has_perm("명부_수정"):
-             st.markdown("#### 👥 조원 명부 수정")
-            updated_members = []
-            name_changes = {}
+                st.markdown("#### 👥 조원 명부 수정")
+                updated_members = []
+                name_changes = {}
 
-            for i, m in enumerate(team_data.get("members", [])):
-                is_ldr = " 👑" if i == team_data.get("leader_idx", 0) else ""
-                st.markdown(f"**조원 {i+1}{is_ldr}**")
-                c1, c2, c3 = st.columns(3)
-                old_name = m["이름"]
-                with c1: new_name = st.text_input("이름", value=old_name, key=f"mn_{i}").strip()
-                with c2: new_contact = st.text_input("연락처", value=m["연락처"], key=f"mc_{i}")
-                with c3: new_role = st.text_input("역할", value=m["역할"], key=f"mr_{i}")
-                updated_members.append({"이름": new_name, "연락처": new_contact, "역할": new_role})
-                if old_name and new_name and old_name != new_name:
-                    name_changes[old_name] = new_name
+                for i, m in enumerate(team_data.get("members", [])):
+                    is_ldr = " 👑" if i == team_data.get("leader_idx", 0) else ""
+                    st.markdown(f"**조원 {i+1}{is_ldr}**")
+                    c1, c2, c3 = st.columns(3)
+                    old_name = m["이름"]
+                    with c1: new_name = st.text_input("이름", value=old_name, key=f"mn_{i}").strip()
+                    with c2: new_contact = st.text_input("연락처", value=m["연락처"], key=f"mc_{i}")
+                    with c3: new_role = st.text_input("역할", value=m["역할"], key=f"mr_{i}")
+                    updated_members.append({"이름": new_name, "연락처": new_contact, "역할": new_role})
+                    if old_name and new_name and old_name != new_name:
+                        name_changes[old_name] = new_name
 
-            if st.button("💾 명부 저장 및 이름 변경 반영", type="primary"):
-                _db2 = get_cached_team(st.session_state.current_team_id)
-                t2 = _db2
-                # 이름 변경 일괄 반영
-                for old_n, new_n in name_changes.items():
-                    for key in ["stocks", "stock_logs"]:
-                        if old_n in t2.get(key, {}):
-                            t2[key][new_n] = t2[key].pop(old_n)
-                    for room in t2.get("chat_rooms", []):
-                        room["members"] = [new_n if m == old_n else m for m in room.get("members", [])]
-                    for chat in t2.get("chats_archive", []):
-                        if chat.get("sender") == old_n:
-                            chat["sender"] = new_n
-                    for evs in t2.get("calendar_events", {}).values():
-                        for ev in evs:
-                            if ev.get("worker") == old_n:
-                                ev["worker"] = new_n
-                    for story in t2.get("stories", []):
-                        if story.get("user") == old_n:
-                            story["user"] = new_n
-                        for cm in story.get("comments", []):
-                            if cm.get("writer") == old_n:
-                                cm["writer"] = new_n
-                    if st.session_state.current_user == old_n:
-                        st.session_state.current_user = new_n
+                if st.button("💾 명부 저장 및 이름 변경 반영", type="primary"):
+                    _db2 = get_cached_team(st.session_state.current_team_id)
+                    t2 = _db2
+                    # 이름 변경 일괄 반영
+                    for old_n, new_n in name_changes.items():
+                        for key in ["stocks", "stock_logs"]:
+                            if old_n in t2.get(key, {}):
+                                t2[key][new_n] = t2[key].pop(old_n)
+                        for room in t2.get("chat_rooms", []):
+                            room["members"] = [new_n if m == old_n else m for m in room.get("members", [])]
+                        for chat in t2.get("chats_archive", []):
+                            if chat.get("sender") == old_n:
+                                chat["sender"] = new_n
+                        for evs in t2.get("calendar_events", {}).values():
+                            for ev in evs:
+                                if ev.get("worker") == old_n:
+                                    ev["worker"] = new_n
+                        for story in t2.get("stories", []):
+                            if story.get("user") == old_n:
+                                story["user"] = new_n
+                            for cm in story.get("comments", []):
+                                if cm.get("writer") == old_n:
+                                    cm["writer"] = new_n
+                        if st.session_state.current_user == old_n:
+                            st.session_state.current_user = new_n
 
-                t2["members"] = updated_members
-                # 새 조원 주식 초기화
-                for m in t2["members"]:
-                    if m["이름"] and m["이름"] not in t2.setdefault("stocks", {}):
-                        t2["stocks"][m["이름"]] = [10000]
-                        t2.setdefault("stock_logs", {})[m["이름"]] = []
-                save_team_data(st.session_state.current_team_id, _db2)
-                st.success("✅ 명부가 저장되었습니다.")
-                st.rerun()
+                    t2["members"] = updated_members
+                    # 새 조원 주식 초기화
+                    for m in t2["members"]:
+                        if m["이름"] and m["이름"] not in t2.setdefault("stocks", {}):
+                            t2["stocks"][m["이름"]] = [10000]
+                            t2.setdefault("stock_logs", {})[m["이름"]] = []
+                    save_team_data(st.session_state.current_team_id, _db2)
+                    st.success("✅ 명부가 저장되었습니다.")
+                    st.rerun()
+            else:
+                st.info("❌ 조원 명부 수정 권한이 없습니다.")
 
             # ──────────────────────────────────────────────────────
             # 부조장 관리 섹션 (조장 전용)
