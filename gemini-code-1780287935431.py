@@ -316,14 +316,44 @@ def extract_mentions(text: str, member_names: list) -> list:
     return [name for name in member_names if f"@{name}" in text]
 
 # =============================================
+# [부조장 권한 체크 헬퍼]
+# =============================================
+
+# 부조장이 가질 수 있는 권한 목록 (조장이 체크박스로 선택)
+SUB_LEADER_PERM_LIST = [
+    ("공지_작성",   "📢 공지 작성 및 삭제"),
+    ("업무_결재",   "✔️ 업무 결재 / 반려"),
+    ("업무_추가",   "➕ 업무 일정 추가 / 삭제"),
+    ("명부_수정",   "👥 조원 명부 수정"),
+    ("기여도_수정", "📊 기여도 수동 조정"),
+    ("채팅방_관리", "💬 채팅방 개설 / 이름 변경"),
+    ("팀정보_수정", "⚙️ 팀 기본 정보 수정"),
+]
+
+def has_perm(perm_key: str) -> bool:
+    """
+    현재 사용자가 해당 권한을 가지고 있는지 확인.
+    - leader: 모든 권한 보유
+    - sub_leader: session_state.sub_leader_perms 에 있는 것만
+    - member/admin: False
+    """
+    role = st.session_state.get("user_role", "member")
+    if role == "leader":
+        return True
+    if role == "sub_leader":
+        return perm_key in st.session_state.get("sub_leader_perms", [])
+    return False
+
+# =============================================
 # [세션 초기화]
 # =============================================
 _defaults = {
     "current_team_id": None,
     "current_user": None,
-    "user_role": "leader",
+    "user_role": "leader",       # "leader" | "sub_leader" | "member" | "admin"
     "step": "auth_login",
     "active_chat_room_id": None,
+    "sub_leader_perms": [],      # 부조장 권한 목록 (캐시)
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -367,7 +397,12 @@ with st.sidebar:
         if st.session_state.user_role == "admin":
             st.error(f"👑 마스터 관리자\n\n**{st.session_state.current_user}**")
         else:
-            role_label = "👑 조장" if st.session_state.user_role == "leader" else "👤 조원"
+            if st.session_state.user_role == "leader":
+                role_label = "👑 조장"
+            elif st.session_state.user_role == "sub_leader":
+                role_label = "🥈 부조장"
+            else:
+                role_label = "👤 조원"
             t_name_display = team_data.get("team_name", "설정중") if team_data else "설정중"
             st.success(f"**{t_name_display}**\n\n{st.session_state.current_user} [{role_label}]")
 
@@ -408,7 +443,9 @@ if st.session_state.step == "member_auth" and team_data:
     if not m_names:
         st.error("❌ 조장님이 아직 조원 명부를 작성하지 않았습니다.")
     else:
-        only_members = [n for n in m_names if n != leader_name]
+        # 부조장 계정이 등록된 이름은 선택 목록에서 제외
+        _sub_ids = [s.get("member_name","") for s in team_data.get("sub_leaders", [])]
+        only_members = [n for n in m_names if n != leader_name and n not in _sub_ids]
         if not only_members:
             st.warning("현재 조장 외에 등록된 조원이 없습니다.")
             st.stop()
@@ -462,19 +499,45 @@ elif st.session_state.step == "auth_login":
                     _stored_pw = _db["users_master"][login_id]["pw"]
                     _login_ok, _new_pw = migrate_pw_if_plain(_stored_pw, login_pw)
                     if _login_ok:
-                        # 평문 계정 자동 해시 마이그레이션
                         if _new_pw != _stored_pw:
                             _db2 = get_cached_meta()
                             _db2["users_master"][login_id]["pw"] = _new_pw
                             save_meta_data(_db2)
                         user_info = _db["users_master"][login_id]
                         st.session_state.current_user = login_id
-                        st.session_state.user_role = "leader"
                         st.session_state.current_team_id = user_info["team_id"]
+                        # 부조장 여부 확인
+                        if user_info.get("role") == "sub_leader":
+                            st.session_state.user_role = "sub_leader"
+                            st.session_state.sub_leader_perms = user_info.get("perms", [])
+                        else:
+                            st.session_state.user_role = "leader"
+                            st.session_state.sub_leader_perms = []
                         st.session_state.step = "main_home" if user_info["team_id"] in _db["teams_index"] else "setup_1"
                         st.rerun()
                     else:
-                        st.error("아이디 또는 비밀번호가 잘못되었습니다.")
+                        # 부조장 계정 별도 확인 (users_master 외 sub_leaders에 저장된 경우)
+                        _found_sub = False
+                        for _tid, _tinfo in _db.get("teams_index", {}).items():
+                            _team_d = get_cached_team(_tid)
+                            if not _team_d:
+                                continue
+                            for _sub in _team_d.get("sub_leaders", []):
+                                if _sub.get("id") == login_id:
+                                    _sub_ok, _sub_new_pw = migrate_pw_if_plain(_sub.get("pw",""), login_pw)
+                                    if _sub_ok:
+                                        if _sub_new_pw != _sub.get("pw",""):
+                                            _sub["pw"] = _sub_new_pw
+                                            save_team_data(_tid, _team_d)
+                                        st.session_state.current_user = login_id
+                                        st.session_state.user_role = "sub_leader"
+                                        st.session_state.current_team_id = _tid
+                                        st.session_state.sub_leader_perms = _sub.get("perms", [])
+                                        st.session_state.step = "main_home"
+                                        _found_sub = True
+                                        st.rerun()
+                        if not _found_sub:
+                            st.error("아이디 또는 비밀번호가 잘못되었습니다.")
         with col_l2:
             _db_sec = get_cached_meta()
             _team_lock = _db_sec["admin_master"].get("security_settings", {}).get("new_team_lock", False)
@@ -1692,7 +1755,13 @@ else:
 
     current_name = st.session_state.current_user
     is_leader = (st.session_state.user_role == "leader")
-    my_chat_name = leader_name if (is_leader and leader_name != "미정") else current_name
+    is_sub_leader = (st.session_state.user_role == "sub_leader")
+    # 부조장은 자신의 member_name을 my_chat_name으로 사용
+    if is_sub_leader:
+        _sub_info = next((s for s in team_data.get("sub_leaders", []) if s.get("id") == current_name), {})
+        my_chat_name = _sub_info.get("member_name", current_name)
+    else:
+        my_chat_name = leader_name if (is_leader and leader_name != "미정") else current_name
 
     # 전사 긴급 공지 배너 (run_every 주기를 길게 조정)
     @st.fragment(run_every=15)
@@ -1773,7 +1842,7 @@ else:
     st.write("---")
 
     tab_titles = ["📢 공지사항", "✨ 스토리 피드", "📊 기여도", "📅 일정 관리", "💬 채팅방", "🚨 SOS 고객센터"]
-    if is_leader:
+    if is_leader or is_sub_leader:
         tab_titles.insert(4, "👥 팀 관리")
 
     tabs = st.tabs(tab_titles)
@@ -1783,7 +1852,7 @@ else:
     with tab_map["📢 공지사항"]:
         st.subheader("📌 팀 공지사항")
 
-        if is_leader:
+        if has_perm("공지_작성"):
             with st.form("notice_form", clear_on_submit=True):
                 notice_text = st.text_area("새 공지 작성")
                 uploaded_file = st.file_uploader("파일 첨부 (선택)")
@@ -1825,7 +1894,7 @@ else:
                         st.success("✅ 공지가 게시되었습니다.")
                         st.rerun()
         else:
-            st.caption("공지사항 편집 권한은 조장 전용입니다.")
+            st.caption("공지사항 편집 권한은 조장/부조장 전용입니다.")
 
         st.write("---")
 
@@ -1854,7 +1923,7 @@ else:
                             file_data = base64.b64decode(n["file_bytes"]) if isinstance(n["file_bytes"], str) else n["file_bytes"]
                             st.download_button(f"📎 {n['file_name']}", data=file_data, file_name=n["file_name"], key=f"notice_dl_{real_idx}")
                     with col_nd:
-                        if is_leader:
+                        if has_perm("공지_작성"):
                             pin_btn_label = "📌" if not is_pinned else "📍"
                             pin_btn_help = "고정" if not is_pinned else "고정 해제"
                             if st.button(pin_btn_label, key=f"pin_notice_{real_idx}", help=pin_btn_help):
@@ -2005,7 +2074,8 @@ else:
         st.subheader("📊 기여도 주식 대시보드")
 
         if is_leader:
-            with st.expander("⚙️ 기여도 수동 조정 (조장 전용)"):
+            if has_perm("기여도_수정"):
+             with st.expander("⚙️ 기여도 수동 조정 (조장/부조장 전용)"):
                 _db = get_cached_team(st.session_state.current_team_id)
                 cur_stocks = (_db or {}).get("stocks", {})
                 if cur_stocks:
@@ -2129,7 +2199,7 @@ else:
         date_list = [start_d_val + timedelta(days=i) for i in range((end_d_val - start_d_val).days + 1)]
         date_strs = [str(d) for d in date_list]
 
-        if is_leader:
+        if has_perm("업무_추가"):
             with st.expander("➕ 새 업무 추가", expanded=True):
                 col_r1, col_r2, col_r3 = st.columns([2, 2, 4])
                 with col_r1:
@@ -2226,7 +2296,7 @@ else:
                                 c_s.error("반려", icon="❌")
                             else:
                                 c_s.warning("대기", icon="⏳")
-                            if is_leader:
+                            if has_perm("업무_결재"):
                                 with c_ops:
                                     b1, b2, b3 = st.columns(3)
                                     ev_id = ev.get("id", f"{d_str}_{idx}")
@@ -2289,7 +2359,7 @@ else:
                                             cal[d_str] = [x for x in cal.get(d_str, []) if x.get("id") != ev_id]
                                             save_team_data(st.session_state.current_team_id, _db2)
                                             st.rerun()
-                            else:
+                            elif not has_perm("업무_결재"):
                                 c_ops.write("🔒")
                 else:
                     if is_today:
@@ -2297,10 +2367,14 @@ else:
 
         show_calendar_live()
 
-    # --- 탭: 팀 관리 (조장 전용) ---
-    if is_leader:
+    # --- 탭: 팀 관리 (조장/부조장) ---
+    if is_leader or is_sub_leader:
         with tab_map["👥 팀 관리"]:
             st.subheader("👥 팀 관리")
+            
+            # 부조장이면 부여받은 권한만 요약 표시
+            if is_sub_leader:
+                st.info(f"🥈 부조장 계정으로 입장했습니다. 부여된 권한: **{', '.join(st.session_state.get('sub_leader_perms', []))}**")
 
             host = st.context.headers.get("Host", "localhost:8501")
             protocol = "https" if "localhost" not in host else "http"
@@ -2327,7 +2401,7 @@ else:
                 except Exception:
                     _end_def = date_type.today()
                 edit_end_d = st.date_input("📅 프로젝트 마감일", value=_end_def, key="edit_end_d")
-            if st.button("💾 기본 정보 저장"):
+            if has_perm("팀정보_수정") and st.button("💾 기본 정보 저장"):
                 _db2 = get_cached_team(st.session_state.current_team_id)
                 _db2["team_name"] = edit_tname.strip() or team_data.get("team_name", "우리팀")
                 _db2["subject"] = edit_subj.strip()
@@ -2338,7 +2412,8 @@ else:
                 st.rerun()
 
             st.write("---")
-            st.markdown("#### 👥 조원 명부 수정")
+            if has_perm("명부_수정"):
+             st.markdown("#### 👥 조원 명부 수정")
             updated_members = []
             name_changes = {}
 
@@ -2389,6 +2464,152 @@ else:
                 save_team_data(st.session_state.current_team_id, _db2)
                 st.success("✅ 명부가 저장되었습니다.")
                 st.rerun()
+
+            # ──────────────────────────────────────────────────────
+            # 부조장 관리 섹션 (조장 전용)
+            # ──────────────────────────────────────────────────────
+            if is_leader:
+                st.write("---")
+                st.markdown("#### 🥈 부조장 관리")
+
+                _sub_leaders = team_data.get("sub_leaders", [])
+
+                # 현재 등록된 부조장 목록
+                if _sub_leaders:
+                    st.caption(f"현재 등록된 부조장: {len(_sub_leaders)}명")
+                    for _si, _sub in enumerate(_sub_leaders):
+                        with st.container(border=True):
+                            _sc1, _sc2 = st.columns([4, 1])
+                            with _sc1:
+                                st.markdown(f"**🥈 {_sub.get('member_name','?')}** (ID: `{_sub.get('id','?')}`)")
+                                _perm_labels = {k: v for k, v in SUB_LEADER_PERM_LIST}
+                                _granted = [_perm_labels.get(p, p) for p in _sub.get("perms", [])]
+                                st.caption("권한: " + (", ".join(_granted) if _granted else "없음"))
+                            with _sc2:
+                                if st.button("🗑️ 삭제", key=f"del_sub_{_si}"):
+                                    _db2 = get_cached_team(st.session_state.current_team_id)
+                                    _db2["sub_leaders"] = [s for s in _db2.get("sub_leaders", []) if s.get("id") != _sub.get("id")]
+                                    save_team_data(st.session_state.current_team_id, _db2)
+                                    # users_master에서도 제거
+                                    _meta2 = get_cached_meta()
+                                    _meta2.get("users_master", {}).pop(_sub.get("id", ""), None)
+                                    save_meta_data(_meta2)
+                                    st.success(f"✅ {_sub.get('member_name','?')} 부조장 계정이 삭제되었습니다.")
+                                    st.rerun()
+                else:
+                    st.caption("등록된 부조장이 없습니다.")
+
+                st.write("---")
+
+                # 부조장 신규 등록 (세션 기반 단계 UI)
+                if "sub_step" not in st.session_state:
+                    st.session_state.sub_step = 0
+                if "sub_temp" not in st.session_state:
+                    st.session_state.sub_temp = {}
+
+                if st.session_state.sub_step == 0:
+                    # 단계 0: 부조장 기능 사용 여부 확인
+                    st.markdown("##### 🆕 부조장 등록하기")
+                    col_sub0a, col_sub0b = st.columns(2)
+                    with col_sub0a:
+                        if st.button("➕ 부조장 등록 시작", type="primary", use_container_width=True):
+                            st.session_state.sub_step = 1
+                            st.session_state.sub_temp = {}
+                            st.rerun()
+
+                elif st.session_state.sub_step == 1:
+                    # 단계 1: 누구를 부조장으로 할지 + 권한 선택
+                    st.markdown("##### 1단계: 부조장 지정 및 권한 설정")
+                    non_leader_members = [n for n in m_names if n != leader_name]
+                    if not non_leader_members:
+                        st.warning("조원을 먼저 등록해주세요.")
+                        st.session_state.sub_step = 0
+                        st.rerun()
+
+                    _sub_target = st.selectbox("👤 부조장으로 지정할 조원", non_leader_members, key="sub_target_select")
+                    st.markdown("**✅ 허용할 권한 선택:**")
+                    _selected_perms = []
+                    for _pk, _pl in SUB_LEADER_PERM_LIST:
+                        if st.checkbox(_pl, key=f"perm_{_pk}"):
+                            _selected_perms.append(_pk)
+
+                    col_sub1a, col_sub1b = st.columns(2)
+                    with col_sub1a:
+                        if st.button("다음 →  (ID/PW 설정)", type="primary", use_container_width=True):
+                            if not _selected_perms:
+                                st.warning("최소 1개 이상의 권한을 선택하세요.")
+                            else:
+                                st.session_state.sub_temp = {
+                                    "member_name": _sub_target,
+                                    "perms": _selected_perms,
+                                }
+                                st.session_state.sub_step = 2
+                                st.rerun()
+                    with col_sub1b:
+                        if st.button("취소", use_container_width=True):
+                            st.session_state.sub_step = 0
+                            st.rerun()
+
+                elif st.session_state.sub_step == 2:
+                    # 단계 2: ID/PW 생성
+                    _target_name = st.session_state.sub_temp.get("member_name", "?")
+                    _target_perms = st.session_state.sub_temp.get("perms", [])
+                    _perm_labels_map = {k: v for k, v in SUB_LEADER_PERM_LIST}
+
+                    st.markdown(f"##### 2단계: **{_target_name}** 부조장 계정 만들기")
+                    st.info(f"선택된 권한: {', '.join([_perm_labels_map.get(p,p) for p in _target_perms])}")
+                    st.caption(f"✏️ {_target_name}님이 로그인할 때 사용할 ID와 비밀번호를 설정해주세요.")
+
+                    with st.form("sub_leader_create_form", clear_on_submit=False):
+                        _sub_id = st.text_input("부조장 ID", placeholder="예: sub_홍길동").strip()
+                        _sub_pw = st.text_input("비밀번호", type="password", placeholder="8자 이상 권장").strip()
+                        _sub_pw2 = st.text_input("비밀번호 확인", type="password").strip()
+
+                        col_sub2a, col_sub2b = st.columns(2)
+                        with col_sub2a:
+                            _sub_submitted = st.form_submit_button("✅ 부조장 등록 완료", type="primary")
+                        with col_sub2b:
+                            _sub_back = st.form_submit_button("← 이전으로")
+
+                        if _sub_back:
+                            st.session_state.sub_step = 1
+                            st.rerun()
+
+                        if _sub_submitted:
+                            if not _sub_id:
+                                st.error("ID를 입력하세요.")
+                            elif not _sub_pw:
+                                st.error("비밀번호를 입력하세요.")
+                            elif _sub_pw != _sub_pw2:
+                                st.error("비밀번호가 일치하지 않습니다.")
+                            else:
+                                # ID 중복 체크
+                                _meta_chk = get_cached_meta()
+                                if _sub_id in _meta_chk.get("users_master", {}) or _sub_id == _meta_chk["admin_master"]["admin_id"]:
+                                    st.error("❌ 이미 사용 중인 ID입니다.")
+                                else:
+                                    # 팀 데이터에 sub_leaders 저장
+                                    _db2 = get_cached_team(st.session_state.current_team_id)
+                                    _db2.setdefault("sub_leaders", []).append({
+                                        "id": _sub_id,
+                                        "pw": hash_pw(_sub_pw),
+                                        "member_name": _target_name,
+                                        "perms": _target_perms,
+                                    })
+                                    save_team_data(st.session_state.current_team_id, _db2)
+                                    # users_master에도 등록 (로그인 시 빠른 조회용)
+                                    _meta2 = get_cached_meta()
+                                    _meta2["users_master"][_sub_id] = {
+                                        "pw": hash_pw(_sub_pw),
+                                        "team_id": st.session_state.current_team_id,
+                                        "role": "sub_leader",
+                                        "perms": _target_perms,
+                                    }
+                                    save_meta_data(_meta2)
+                                    st.session_state.sub_step = 0
+                                    st.session_state.sub_temp = {}
+                                    st.success(f"🎉 **{_target_name}** 님의 부조장 계정이 생성되었습니다! ID: `{_sub_id}` — 로그인 화면에서 해당 ID/PW로 입장하면 됩니다.")
+                                    st.rerun()
 
     # --- 탭: 채팅방 ---
     with tab_map["💬 채팅방"]:
@@ -2466,7 +2687,7 @@ else:
                         st.markdown(f"### 💬 {target_room['title']}")
                         st.caption(f"👥 {', '.join(target_room['members'])}")
                     with col_ce:
-                        if is_leader:
+                        if has_perm("채팅방_관리"):
                             new_room_name = st.text_input("방 이름 변경", value=target_room["title"], key=f"rename_{target_room['room_id']}", label_visibility="collapsed")
                             if st.button("✏️ 이름 변경", key=f"rename_btn_{target_room['room_id']}", use_container_width=True):
                                 if new_room_name.strip() and new_room_name.strip() != target_room["title"]:
