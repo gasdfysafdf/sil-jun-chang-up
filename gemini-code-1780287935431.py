@@ -781,7 +781,8 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         _db = get_cached_meta()
         # get_all_teams() 를 딱 1번만 호출해 변수에 저장 → 이전엔 4번 호출로 쿼리 낭비
         _all_teams = get_all_teams()
-        total_teams = len(_db["users_master"])
+        # ✅ 부조장 제외하고 조장만 카운트
+        total_teams = sum(1 for u_info in _db["users_master"].values() if u_info.get("role") != "sub_leader")
         total_members  = sum(len(v.get("members", []))       for v in _all_teams.values())
         total_bugs     = len(_db["admin_master"].get("bug_reports", []))
         pending_bugs   = len([r for r in _db["admin_master"].get("bug_reports", []) if r["status"] != "✔️ 처리완료"])
