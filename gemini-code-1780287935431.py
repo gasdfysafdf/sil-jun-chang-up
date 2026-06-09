@@ -812,6 +812,9 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
             else:
                 rows = []
                 for l_id, u_info in _db["users_master"].items():
+                    # ✅ 부조장 제외
+                    if u_info.get("role") == "sub_leader":
+                        continue
                     t_id = u_info["team_id"]
                     t_info = _all_teams.get(t_id, {})   # 위에서 이미 로드한 _all_teams 재사용
                     pending_tasks = sum(
@@ -849,7 +852,11 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
             st.info("등록된 팀이 없습니다.")
         else:
             records = []
+            leader_ids = []  # ✅ 조장 ID만 수집
             for l_id, u_info in _db["users_master"].items():
+                # ✅ 부조장 제외
+                if u_info.get("role") == "sub_leader":
+                    continue
                 t_id = u_info["team_id"]
                 t_info = get_all_teams().get(t_id, {})
                 records.append({
@@ -859,13 +866,14 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
                     "조원 수": len(t_info.get("members", [])),
                     "마감일": t_info.get("end_date", "-"),
                 })
+                leader_ids.append(l_id)
             st.dataframe(pd.DataFrame(records), use_container_width=True)
 
             st.write("---")
             col_pw1, col_pw2 = st.columns(2)
             with col_pw1:
                 st.markdown("#### 🔑 비밀번호 강제 변경")
-                target_leader = st.selectbox("대상 조장 ID", list(_db["users_master"].keys()), key="pw_reset_select")
+                target_leader = st.selectbox("대상 조장 ID", leader_ids, key="pw_reset_select")
                 new_pw = st.text_input("새 비밀번호", placeholder="새 비밀번호 입력", key="new_pw_input")
                 if st.button("🔒 비밀번호 변경", type="primary"):
                     if new_pw.strip():
@@ -902,6 +910,9 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         else:
             team_options = {}
             for l_id, u_info in _db["users_master"].items():
+                # ✅ 수정: 조장만 포함 (부조장 제외)
+                if u_info.get("role") == "sub_leader":
+                    continue  # 부조장은 팀 목록에서 제외
                 t_id = u_info["team_id"]
                 t_info = get_all_teams().get(t_id, {})
                 label = f"{t_info.get('team_name', '설정중')} (조장: {l_id})"
@@ -1083,6 +1094,9 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         else:
             analysis_options = {}
             for l_id, u_info in _db["users_master"].items():
+                # ✅ 부조장 제외
+                if u_info.get("role") == "sub_leader":
+                    continue
                 t_id = u_info["team_id"]
                 t_info = get_all_teams().get(t_id, {})
                 label = f"{t_info.get('team_name', '설정중')} (조장: {l_id})"
@@ -1168,6 +1182,9 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
         else:
             mgmt_opts = {}
             for l_id, u_info in _db["users_master"].items():
+                # ✅ 부조장 제외
+                if u_info.get("role") == "sub_leader":
+                    continue
                 t_id = u_info["team_id"]
                 t_info = get_all_teams().get(t_id, {})
                 mgmt_opts[f"{t_info.get('team_name', '설정중')} (조장: {l_id})"] = (l_id, t_id)
@@ -1383,6 +1400,9 @@ elif st.session_state.step == "admin_dashboard" and st.session_state.user_role =
             else:
                 mon_team_opts = {}
                 for l_id, u_info in _db["users_master"].items():
+                    # ✅ 부조장 제외
+                    if u_info.get("role") == "sub_leader":
+                        continue
                     t_id = u_info["team_id"]
                     t_info = get_all_teams().get(t_id, {})
                     lbl = f"{t_info.get('team_name','설정중')} ({l_id})"
